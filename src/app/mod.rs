@@ -9,7 +9,10 @@ use tracing::info;
 use crate::components::connection::{ConnectionDialog, ConnectionDialogOutput};
 use crate::components::detail::movie_detail::{MovieDetail, MovieDetailMsg, MovieDetailOutput};
 use crate::components::detail::show_detail::{ShowDetail, ShowDetailMsg, ShowDetailOutput};
-use crate::components::downloads::{DownloadsView, DownloadsViewMsg, DownloadsViewOutput};
+use crate::components::downloads::{
+    DeleteMode, DownloadsConfig, DownloadsScope, DownloadsView, DownloadsViewMsg,
+    DownloadsViewOutput,
+};
 use crate::components::home::{HomeView, HomeViewMsg, HomeViewOutput};
 use crate::components::library::{LibraryView, LibraryViewMsg, LibraryViewOutput};
 
@@ -69,6 +72,14 @@ pub struct App {
     movie_detail: Controller<MovieDetail>,
     show_detail: Controller<ShowDetail>,
     downloads_view: Controller<DownloadsView>,
+    /// The per-show download drill-in, created on demand when a show card is
+    /// tapped and dropped when its page is popped or its group empties.
+    show_drilldown: Option<Controller<DownloadsView>>,
+    /// The group id the open drill-in is scoped to (for live refresh + auto-pop).
+    drilldown_group: Option<String>,
+    /// Downloads whose delete is pending an undo-toast window: captured rows
+    /// keyed by `media_item_id`, restored on undo or removed on finalize.
+    pending_deletes: std::collections::HashMap<String, crate::models::download::Download>,
     connection_dialog: Option<Controller<ConnectionDialog>>,
     screensaver: ScreensaverInhibitor,
     toast_overlay: adw::ToastOverlay,
@@ -151,6 +162,74 @@ impl App {
         self.now_playing
             .as_ref()
             .and_then(|item| self.sources.for_item(item))
+    }
+
+    /// Open the per-show download drill-in: a `DownloadsView` scoped to one
+    /// group's episodes, pushed as a navigation page. Built fresh on each open
+    /// and dropped on pop / when the group empties (`maybe_pop_empty_drilldown`).
+    /// Show identity (page title) comes from the group row, never the episode
+    /// `parent_id` (which is the season, not the show).
+    fn open_show_downloads(&mut self, group_id: &str, sender: &ComponentSender<Self>) {
+        let title = self
+            .db
+            .as_ref()
+            .and_then(|db| {
+                db.with(|conn| {
+                    crate::db::downloads_repo::DownloadsRepo::new(conn)
+                        .find_group(group_id)
+                        .ok()
+                        .flatten()
+                })
+            })
+            .map(|g| g.title)
+            .unwrap_or_else(|| "Downloaded Episodes".to_string());
+
+        let controller = DownloadsView::builder()
+            .launch(DownloadsConfig {
+                scope: DownloadsScope::Group(group_id.to_string()),
+                delete_mode: DeleteMode::Undo,
+            })
+            .forward(sender.input_sender(), |output| match output {
+                DownloadsViewOutput::ItemAction {
+                    media_item_id,
+                    action,
+                } => AppMsg::DownloadAction {
+                    media_item_id,
+                    action,
+                },
+                DownloadsViewOutput::RequestDelete {
+                    media_item_id,
+                    title,
+                } => AppMsg::RequestDeleteDownload {
+                    media_item_id,
+                    title,
+                },
+                DownloadsViewOutput::PlayDownload(id) => AppMsg::PlayDownload(id),
+                // A drill-in renders no group cards, so these never fire; map
+                // them to their normal handlers rather than panicking.
+                DownloadsViewOutput::OpenShowDownloads(gid) => AppMsg::OpenShowDownloads(gid),
+                DownloadsViewOutput::OpenDetail(id) => AppMsg::OpenDownloadDetail(id),
+            });
+
+        let src = match &self.browsed_source {
+            Some((t, id)) => self.sources.get(*t, id),
+            None => None,
+        };
+        if let Some(src) = src {
+            controller.emit(DownloadsViewMsg::SetSource(src, self.artwork_cache.clone()));
+        }
+
+        let page = adw::NavigationPage::builder()
+            .title(&title)
+            .tag("drilldown")
+            .child(controller.widget())
+            .build();
+        self.nav_view.push(&page);
+
+        self.show_drilldown = Some(controller);
+        self.drilldown_group = Some(group_id.to_string());
+        // Populate the freshly-built drill-in with the current snapshot.
+        self.refresh_downloads_view();
     }
 
     /// The full set of connected sources as `(source_type, source_id, source)`,
@@ -434,6 +513,22 @@ pub enum AppMsg {
         episodes: Vec<MediaItem>,
         scope: crate::models::download::GroupScope,
     },
+    /// Download (or retry) a single episode, nesting it under its show's group.
+    EnqueueDownloadEpisode {
+        show: Box<MediaItem>,
+        episode: Box<MediaItem>,
+    },
+    /// Open the per-show download drill-in for a group id.
+    OpenShowDownloads(String),
+    /// Begin an undoable delete of a download (shows an undo toast).
+    RequestDeleteDownload {
+        media_item_id: String,
+        title: String,
+    },
+    /// Undo button on the delete toast was pressed: restore the captured row.
+    UndoDeleteDownload(String),
+    /// The delete toast was dismissed: finalize the delete unless it was undone.
+    FinalizeDeleteDownload(String),
     /// A per-item download action from the Downloads UI.
     DownloadAction {
         media_item_id: String,
@@ -638,13 +733,23 @@ impl Component for App {
                     episodes,
                     scope,
                 },
+                ShowDetailOutput::DownloadEpisode { show, episode } => {
+                    AppMsg::EnqueueDownloadEpisode { show, episode }
+                }
+                ShowDetailOutput::DeleteEpisode {
+                    media_item_id,
+                    title,
+                } => AppMsg::RequestDeleteDownload {
+                    media_item_id,
+                    title,
+                },
                 ShowDetailOutput::Error(msg) => AppMsg::ShowToast(msg),
             },
         );
 
-        let downloads_view = DownloadsView::builder().launch(()).forward(
-            sender.input_sender(),
-            |output| match output {
+        let downloads_view = DownloadsView::builder()
+            .launch(DownloadsConfig::default())
+            .forward(sender.input_sender(), |output| match output {
                 DownloadsViewOutput::ItemAction {
                     media_item_id,
                     action,
@@ -652,14 +757,23 @@ impl Component for App {
                     media_item_id,
                     action,
                 },
+                DownloadsViewOutput::OpenShowDownloads(group_id) => {
+                    AppMsg::OpenShowDownloads(group_id)
+                }
+                DownloadsViewOutput::RequestDelete {
+                    media_item_id,
+                    title,
+                } => AppMsg::RequestDeleteDownload {
+                    media_item_id,
+                    title,
+                },
                 DownloadsViewOutput::OpenDetail(media_item_id) => {
                     AppMsg::OpenDownloadDetail(media_item_id)
                 }
                 DownloadsViewOutput::PlayDownload(media_item_id) => {
                     AppMsg::PlayDownload(media_item_id)
                 }
-            },
-        );
+            });
 
         let widgets = view_output!();
 
@@ -714,6 +828,9 @@ impl Component for App {
             movie_detail,
             show_detail,
             downloads_view,
+            show_drilldown: None,
+            drilldown_group: None,
+            pending_deletes: std::collections::HashMap::new(),
             connection_dialog: None,
             screensaver: ScreensaverInhibitor::new(),
             toast_overlay,
@@ -895,6 +1012,9 @@ impl Component for App {
                         .emit(ShowDetailMsg::SetSource(src, self.artwork_cache.clone()));
                 }
                 self.show_detail.emit(ShowDetailMsg::LoadShow(item.clone()));
+                // Seed the per-episode download controls with current state so
+                // they're correct as soon as the episode list renders.
+                self.refresh_downloads_view();
                 let page = adw::NavigationPage::builder()
                     .title(&item.title)
                     .child(self.show_detail.widget())
@@ -1296,6 +1416,24 @@ impl Component for App {
                 scope,
             } => {
                 download_handlers::enqueue_group(self, &parent, &episodes, scope);
+            }
+            AppMsg::EnqueueDownloadEpisode { show, episode } => {
+                download_handlers::enqueue_download_episode(self, &show, &episode);
+            }
+            AppMsg::OpenShowDownloads(group_id) => {
+                self.open_show_downloads(&group_id, &sender);
+            }
+            AppMsg::RequestDeleteDownload {
+                media_item_id,
+                title,
+            } => {
+                download_handlers::request_delete_with_undo(self, &media_item_id, &title, &sender);
+            }
+            AppMsg::UndoDeleteDownload(media_item_id) => {
+                download_handlers::undo_delete(self, &media_item_id);
+            }
+            AppMsg::FinalizeDeleteDownload(media_item_id) => {
+                download_handlers::finalize_delete(self, &media_item_id);
             }
             AppMsg::DownloadAction {
                 media_item_id,

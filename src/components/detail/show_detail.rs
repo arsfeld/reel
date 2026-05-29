@@ -6,9 +6,11 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use tracing::info;
 
+use crate::components::detail::episode_download::{EpisodeDownloadControl, derive_episode_control};
 use crate::db::database::Database;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::detail::MediaDetail;
+use crate::models::download::Download;
 use crate::models::media::{MediaItem, MediaType};
 use crate::models::watch::WatchProgress;
 use crate::services::artwork::ArtworkCache;
@@ -24,6 +26,11 @@ pub struct ShowDetail {
     artwork_cache: Option<Arc<ArtworkCache>>,
     db: Option<Database>,
     watch_progress: HashMap<String, WatchProgress>,
+    /// Latest per-episode download state, keyed by episode `media_item_id`.
+    /// Pushed from the app on every downloads refresh; drives the per-episode
+    /// download/badge/delete control. Cross-show pushes are harmless: a card only
+    /// reads the entry matching its own episode id.
+    download_states: HashMap<String, Download>,
     // Widgets
     title_label: gtk::Label,
     meta_box: gtk::Box,
@@ -71,6 +78,12 @@ pub enum ShowDetailMsg {
     PlayEpisode(usize),
     /// Download the currently-loaded season's episodes as a group.
     DownloadSeason,
+    /// Download (or retry) a single episode by its index in `episodes`.
+    DownloadEpisode(usize),
+    /// Delete a single downloaded episode by its index in `episodes`.
+    DeleteEpisode(usize),
+    /// Replace the per-episode download state and refresh the card controls.
+    SetDownloadStates(Vec<Download>),
     SeasonsLoaded(Vec<MediaItem>),
     EpisodesLoaded(Vec<MediaItem>),
     LoadError(String),
@@ -85,6 +98,9 @@ impl std::fmt::Debug for ShowDetailMsg {
             Self::SelectSeason(idx) => write!(f, "SelectSeason({idx})"),
             Self::PlayEpisode(idx) => write!(f, "PlayEpisode({idx})"),
             Self::DownloadSeason => write!(f, "DownloadSeason"),
+            Self::DownloadEpisode(idx) => write!(f, "DownloadEpisode({idx})"),
+            Self::DeleteEpisode(idx) => write!(f, "DeleteEpisode({idx})"),
+            Self::SetDownloadStates(d) => write!(f, "SetDownloadStates({} rows)", d.len()),
             Self::SeasonsLoaded(s) => write!(f, "SeasonsLoaded({} seasons)", s.len()),
             Self::EpisodesLoaded(e) => write!(f, "EpisodesLoaded({} episodes)", e.len()),
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
@@ -103,6 +119,18 @@ pub enum ShowDetailOutput {
         parent: Box<MediaItem>,
         episodes: Vec<MediaItem>,
         scope: crate::models::download::GroupScope,
+    },
+    /// Download (or retry) a single episode, carrying its parent show so the app
+    /// can nest it under the show's group.
+    DownloadEpisode {
+        show: Box<MediaItem>,
+        episode: Box<MediaItem>,
+    },
+    /// Request deletion of a downloaded episode (routed through the app's
+    /// undo-toast delete path).
+    DeleteEpisode {
+        media_item_id: String,
+        title: String,
     },
     Error(String),
 }
@@ -492,6 +520,7 @@ impl Component for ShowDetail {
             artwork_cache: None,
             db: None,
             watch_progress: HashMap::new(),
+            download_states: HashMap::new(),
             title_label,
             meta_box,
             year_label,
@@ -759,6 +788,29 @@ impl Component for ShowDetail {
                         });
                     }
                 }
+            }
+            ShowDetailMsg::DownloadEpisode(index) => {
+                if let (Some(ep), Some(show)) = (self.episodes.get(index), self.show.as_ref()) {
+                    let _ = sender.output(ShowDetailOutput::DownloadEpisode {
+                        show: Box::new(show.clone()),
+                        episode: Box::new(ep.clone()),
+                    });
+                }
+            }
+            ShowDetailMsg::DeleteEpisode(index) => {
+                if let Some(ep) = self.episodes.get(index) {
+                    let _ = sender.output(ShowDetailOutput::DeleteEpisode {
+                        media_item_id: ep.id.clone(),
+                        title: ep.title.clone(),
+                    });
+                }
+            }
+            ShowDetailMsg::SetDownloadStates(states) => {
+                self.download_states = states
+                    .into_iter()
+                    .map(|d| (d.media_item_id.clone(), d))
+                    .collect();
+                self.update_episode_download_controls(&sender);
             }
             ShowDetailMsg::LoadError(msg) => {
                 let _ = sender.output(ShowDetailOutput::Error(msg));
@@ -1101,12 +1153,21 @@ impl ShowDetail {
                 });
             }
 
-            // Click to play (only if file available)
+            // Per-episode download / status / delete control row. Always present
+            // (even when empty) so a state push can find it as the card's last
+            // child and update it in place without rebuilding the card.
+            let action_row = self.build_episode_action_row(i, ep, sender);
+            card.append(&action_row);
+
+            // Click to play (only if file available). Use released + Claimed so
+            // the action-row buttons claim their own clicks first and a button
+            // press never also starts playback (mirrors the Downloads view).
             if ep.file_path.is_some() {
                 let click = gtk::GestureClick::new();
                 let sender_clone = sender.input_sender().clone();
                 let idx = i;
-                click.connect_pressed(move |_, _, _, _| {
+                click.connect_released(move |gesture, _n, _x, _y| {
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
                     let _ = sender_clone.send(ShowDetailMsg::PlayEpisode(idx));
                 });
                 card.add_controller(click);
@@ -1115,6 +1176,109 @@ impl ShowDetail {
             }
 
             self.episode_cards_box.append(&card);
+        }
+    }
+
+    /// Build the per-episode download control row for card `idx`. The row's
+    /// contents are derived from the current download state; it is rebuilt in
+    /// place by [`Self::update_episode_download_controls`] on every state push.
+    fn build_episode_action_row(
+        &self,
+        idx: usize,
+        ep: &MediaItem,
+        sender: &ComponentSender<Self>,
+    ) -> gtk::Box {
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .margin_top(6)
+            .css_classes(["episode-card-actions"])
+            .build();
+        self.populate_episode_action_row(&row, idx, ep, sender);
+        row
+    }
+
+    /// Fill (or refill) an episode card's action row to match its current
+    /// download control.
+    fn populate_episode_action_row(
+        &self,
+        row: &gtk::Box,
+        idx: usize,
+        ep: &MediaItem,
+        sender: &ComponentSender<Self>,
+    ) {
+        while let Some(child) = row.first_child() {
+            row.remove(&child);
+        }
+        let existing = self.download_states.get(&ep.id);
+        match derive_episode_control(existing, ep.file_path.is_some()) {
+            EpisodeDownloadControl::NotDownloadable => {}
+            EpisodeDownloadControl::Downloadable => {
+                let btn = icon_action_button("folder-download-symbolic", "Download episode");
+                let s = sender.input_sender().clone();
+                btn.connect_clicked(move |_| {
+                    let _ = s.send(ShowDetailMsg::DownloadEpisode(idx));
+                });
+                row.append(&btn);
+            }
+            EpisodeDownloadControl::Queued => row.append(&spinner_badge("Queued")),
+            EpisodeDownloadControl::Downloading => row.append(&spinner_badge("Downloading…")),
+            EpisodeDownloadControl::Paused => {
+                row.append(&icon_badge("media-playback-pause-symbolic", "Paused"));
+            }
+            EpisodeDownloadControl::Failed => {
+                // A labelled button (not a bare badge) so the retry affordance
+                // reads as tappable without relying on a hover cursor (GTK4 has
+                // no `cursor` CSS).
+                let btn = gtk::Button::builder()
+                    .label("Retry")
+                    .tooltip_text("Retry download")
+                    .css_classes(["pill", "destructive-action"])
+                    .build();
+                let s = sender.input_sender().clone();
+                btn.connect_clicked(move |_| {
+                    let _ = s.send(ShowDetailMsg::DownloadEpisode(idx));
+                });
+                row.append(&btn);
+            }
+            EpisodeDownloadControl::Downloaded => {
+                let badge = gtk::Label::builder()
+                    .label("✓ Downloaded")
+                    .css_classes(["episode-card-watched"])
+                    .valign(gtk::Align::Center)
+                    .build();
+                row.append(&badge);
+                let del = icon_action_button("user-trash-symbolic", "Delete download");
+                let s = sender.input_sender().clone();
+                del.connect_clicked(move |_| {
+                    let _ = s.send(ShowDetailMsg::DeleteEpisode(idx));
+                });
+                row.append(&del);
+            }
+        }
+    }
+
+    /// Refresh every visible episode card's action row from the current download
+    /// state. Each card's action row is its last child; the episode it maps to is
+    /// `self.episodes[i]` (cards are built in episode order).
+    fn update_episode_download_controls(&self, sender: &ComponentSender<Self>) {
+        let children = self.episode_cards_box.observe_children();
+        for i in 0..children.n_items() {
+            let Some(card) = children.item(i) else {
+                continue;
+            };
+            let Ok(card) = card.downcast::<gtk::Box>() else {
+                continue;
+            };
+            let Some(ep) = self.episodes.get(i as usize) else {
+                continue;
+            };
+            if let Some(last) = card.last_child()
+                && let Ok(row) = last.downcast::<gtk::Box>()
+                && row.has_css_class("episode-card-actions")
+            {
+                self.populate_episode_action_row(&row, i as usize, ep, sender);
+            }
         }
     }
 
@@ -1259,4 +1423,51 @@ impl ShowDetail {
             self.collections_panel.set_visible(true);
         }
     }
+}
+
+/// A flat circular icon button for an episode-card action. The tooltip doubles
+/// as the accessible name (matching the Downloads view's action buttons).
+fn icon_action_button(icon: &str, tooltip: &str) -> gtk::Button {
+    gtk::Button::builder()
+        .icon_name(icon)
+        .tooltip_text(tooltip)
+        .css_classes(["flat", "circular"])
+        .valign(gtk::Align::Center)
+        .build()
+}
+
+/// A non-interactive status badge: a spinning indicator plus a label, for
+/// in-progress (queued/downloading) episodes.
+fn spinner_badge(label: &str) -> gtk::Box {
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .build();
+    let spinner = gtk::Spinner::builder().spinning(true).build();
+    row.append(&spinner);
+    row.append(
+        &gtk::Label::builder()
+            .label(label)
+            .css_classes(["episode-card-meta"])
+            .build(),
+    );
+    row
+}
+
+/// A non-interactive status badge: an icon plus a label, for the paused state.
+fn icon_badge(icon: &str, label: &str) -> gtk::Box {
+    let row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .valign(gtk::Align::Center)
+        .build();
+    row.append(&gtk::Image::from_icon_name(icon));
+    row.append(
+        &gtk::Label::builder()
+            .label(label)
+            .css_classes(["episode-card-meta"])
+            .build(),
+    );
+    row
 }
