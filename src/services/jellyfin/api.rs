@@ -87,6 +87,13 @@ impl JellyfinClient {
         &self.device_id
     }
 
+    /// The shared HTTP client (carries the default Jellyfin auth header). Used by
+    /// the transcode module for the single-attempt decision call and the
+    /// session lifecycle requests, which bypass the retrying `request_factory`.
+    pub fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
     /// GET a URL, retrying transient connection/timeout errors with a short
     /// backoff. HTTP status errors (401/404/5xx) are returned immediately —
     /// they are not transient.
