@@ -167,6 +167,12 @@ pub struct App {
     /// Library cache keys with a background revalidation refetch in flight, so a
     /// second revisit doesn't dispatch a duplicate (coalescing).
     revalidating: std::collections::HashSet<String>,
+    /// True while a background Home revalidation refetch is in flight.
+    home_revalidating: bool,
+    /// Source-set epoch captured when the in-flight Home revalidation was
+    /// dispatched; a mismatch on return means the source set changed and the
+    /// result is dropped.
+    home_revalidate_epoch: u64,
 }
 
 impl App {
@@ -523,6 +529,8 @@ pub enum AppMsg {
     /// Store the assembled Home payload in the session content cache, keyed by
     /// the current source set.
     CacheHome(Box<CachedHome>),
+    /// A background Home revalidation finished; clear the in-flight flag.
+    HomeRevalidationDone,
     /// Persist a library/Collections visibility change (composite key + visible).
     SetLibraryVisible {
         key: String,
@@ -790,6 +798,7 @@ impl Component for App {
                 HomeViewOutput::ShowConnectionDialog => AppMsg::ShowConnectionDialog,
                 HomeViewOutput::Error(msg) => AppMsg::ShowToast(msg),
                 HomeViewOutput::HomeAssembled(home) => AppMsg::CacheHome(home),
+                HomeViewOutput::RevalidationDone => AppMsg::HomeRevalidationDone,
             });
 
         let library_view = LibraryView::builder().launch(()).forward(
@@ -988,6 +997,8 @@ impl Component for App {
             content_mutation_seq: 0,
             content_last_mutation: std::collections::HashMap::new(),
             revalidating: std::collections::HashSet::new(),
+            home_revalidating: false,
+            home_revalidate_epoch: 0,
         };
 
         // Reconcile downloads against disk and rebuild the queue (no transfers
@@ -1052,11 +1063,24 @@ impl Component for App {
                 self.home_view.emit(HomeViewMsg::SetVisibility(
                     self.settings.library_visibility.hidden.clone(),
                 ));
-                // Home cache hit → instant render; miss → full load.
+                // Home cache hit → instant render + background revalidate; miss → load.
                 let set_key = self.home_source_set_key();
                 if let Some(home) = self.content_cache.get_home(&set_key) {
                     self.home_view
                         .emit(HomeViewMsg::ShowCached(Box::new(home.clone())));
+                    // Revalidate in the background only when a server source can be
+                    // refreshed (Local-only Home revalidation is deferred). Gate on
+                    // the same condition HomeView uses so the in-flight flag can't
+                    // get stuck with no completion to clear it.
+                    let has_server = self
+                        .sources
+                        .iter()
+                        .any(|e| e.source_type.provides_server_hubs());
+                    if has_server && !self.home_revalidating {
+                        self.home_revalidating = true;
+                        self.home_revalidate_epoch = self.content_cache.source_set_epoch();
+                        self.home_view.emit(HomeViewMsg::Revalidate);
+                    }
                 } else {
                     let in_progress = load_in_progress(&self.db);
                     self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
@@ -1114,10 +1138,32 @@ impl Component for App {
                 }
             }
             AppMsg::CacheHome(home) => {
-                // Stamp the assembled payload with the current source set, then store.
+                // Stamp the assembled payload with the current source set.
                 let mut home = *home;
                 home.source_set_key = self.home_source_set_key();
-                self.content_cache.set_home(home);
+                let was_revalidating = std::mem::take(&mut self.home_revalidating);
+                // A revalidation whose source set changed mid-flight is stale: drop
+                // it (the changed set already invalidated Home and will reload).
+                if was_revalidating
+                    && self.content_cache.source_set_epoch() != self.home_revalidate_epoch
+                {
+                    return;
+                }
+                // Re-render only when revalidation actually changed the content, so
+                // a revisit doesn't reset Home's scroll for nothing.
+                let changed = self
+                    .content_cache
+                    .get_home(&home.source_set_key)
+                    .is_none_or(|cached| {
+                        !crate::services::session_cache::home_content_eq(cached, &home)
+                    });
+                self.content_cache.set_home(home.clone());
+                if was_revalidating && changed && self.current_view == CurrentView::Home {
+                    self.home_view.emit(HomeViewMsg::ShowCached(Box::new(home)));
+                }
+            }
+            AppMsg::HomeRevalidationDone => {
+                self.home_revalidating = false;
             }
             AppMsg::SetLibraryVisible { key, visible } => {
                 // `key` is the composite visibility key built by the sidebar.

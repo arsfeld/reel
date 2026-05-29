@@ -160,6 +160,16 @@ pub struct CachedHome {
     pub epoch: u64,
 }
 
+/// Whether two cached Home payloads have the same *content* (ignoring the
+/// source-set key and epoch). Used by background Home revalidation to skip a
+/// re-render when nothing changed, so a revisit doesn't reset Home's scroll.
+pub fn home_content_eq(a: &CachedHome, b: &CachedHome) -> bool {
+    a.continue_watching == b.continue_watching
+        && a.recently_added == b.recently_added
+        && a.collections == b.collections
+        && a.hubs == b.hubs
+}
+
 /// Session-scoped content cache. Owned by `App`; all access happens on the GTK
 /// main loop, so no interior mutability or locking is needed.
 #[derive(Debug)]
@@ -723,6 +733,27 @@ mod tests {
         assert!(d.reordered);
         assert!(d.added.is_empty() && d.removed.is_empty() && d.changed.is_empty());
         assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn home_content_eq_ignores_key_and_epoch() {
+        let base = || CachedHome {
+            source_set_key: "k".into(),
+            continue_watching: vec![(item("x"), "Plex".into())],
+            recently_added: vec![("Movies".into(), items(&["x"]))],
+            collections: Vec::new(),
+            hubs: Vec::new(),
+            epoch: 1,
+        };
+        let mut other = base();
+        other.source_set_key = "different".into();
+        other.epoch = 99;
+        assert!(home_content_eq(&base(), &other), "key/epoch ignored");
+
+        // A watch-state change in the payload is a content change.
+        let mut changed = base();
+        changed.continue_watching[0].0.watched = true;
+        assert!(!home_content_eq(&base(), &changed));
     }
 
     #[test]
