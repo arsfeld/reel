@@ -51,15 +51,30 @@ impl QualityPreset {
         }
     }
 
-    /// `videoResolution` as Plex's `WxH`, or `None` for `Original` (source res).
-    pub fn video_resolution(self) -> Option<&'static str> {
+    /// The resolution cap as `(width, height)`, or `None` for `Original`
+    /// (source resolution). The single source of truth for the rung→resolution
+    /// mapping, shared by both backends — Plex formats it as `WxH` via
+    /// [`Self::video_resolution`]; Jellyfin uses the tuple directly in its
+    /// `DeviceProfile` width/height conditions.
+    pub fn video_dimensions(self) -> Option<(u32, u32)> {
         match self {
             QualityPreset::Original => None,
             QualityPreset::P1080Mbps20 | QualityPreset::P1080Mbps12 | QualityPreset::P1080Mbps8 => {
-                Some("1920x1080")
+                Some((1920, 1080))
             }
-            QualityPreset::P720Mbps4 | QualityPreset::P720Mbps3 => Some("1280x720"),
-            QualityPreset::P480Mbps2 | QualityPreset::P480Kbps720 => Some("720x480"),
+            QualityPreset::P720Mbps4 | QualityPreset::P720Mbps3 => Some((1280, 720)),
+            QualityPreset::P480Mbps2 | QualityPreset::P480Kbps720 => Some((720, 480)),
+        }
+    }
+
+    /// `videoResolution` as Plex's `WxH`, or `None` for `Original` (source res).
+    /// Formats [`Self::video_dimensions`] — the ladder lives there, not here.
+    pub fn video_resolution(self) -> Option<&'static str> {
+        match self.video_dimensions() {
+            Some((1920, 1080)) => Some("1920x1080"),
+            Some((1280, 720)) => Some("1280x720"),
+            Some((720, 480)) => Some("720x480"),
+            _ => None,
         }
     }
 

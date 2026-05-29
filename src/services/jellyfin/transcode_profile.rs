@@ -28,19 +28,6 @@ fn effective_preset(quality: QualitySelection, is_remote: bool) -> Option<Qualit
     }
 }
 
-/// `(width, height)` resolution cap for a preset, mirroring the Plex ladder, or
-/// `None` for `Original` (source resolution, no cap).
-fn resolution_cap(preset: QualityPreset) -> Option<(u32, u32)> {
-    match preset {
-        QualityPreset::Original => None,
-        QualityPreset::P1080Mbps20 | QualityPreset::P1080Mbps12 | QualityPreset::P1080Mbps8 => {
-            Some((1920, 1080))
-        }
-        QualityPreset::P720Mbps4 | QualityPreset::P720Mbps3 => Some((1280, 720)),
-        QualityPreset::P480Mbps2 | QualityPreset::P480Kbps720 => Some((720, 480)),
-    }
-}
-
 /// Build the `DeviceProfile` JSON for a `PlaybackInfo` request body, plus the
 /// resolved `MaxStreamingBitrate` in **bits/sec** (`None` = uncapped). The
 /// caller (U3) embeds the profile in the body and also sets the body-level
@@ -71,7 +58,8 @@ pub fn device_profile(quality: QualitySelection, is_remote: bool) -> (Value, Opt
     ];
 
     // Resolution cap (all video codecs) when the selected preset bounds it.
-    if let Some((w, h)) = preset.and_then(resolution_cap) {
+    // The rung→dimensions mapping lives on QualityPreset (shared with Plex).
+    if let Some((w, h)) = preset.and_then(QualityPreset::video_dimensions) {
         codec_profiles.push(json!({
             "Type": "Video",
             "Conditions": [

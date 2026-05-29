@@ -219,18 +219,15 @@ impl MediaSource for JellyfinSource {
         // Record (or clear) the transcode PlaySessionId so the progress path
         // reuses it and reports PlayMethod=Transcode (KTD4b). A re-resolve that
         // lands on direct-play clears any prior transcode session for the item.
-        match (&decision.session, decision.kind.is_transcode_like()) {
-            (Some(psid), true) => {
-                self.transcode_sessions
-                    .lock()
-                    .unwrap()
-                    .insert(req.rating_key.clone(), psid.clone());
-            }
-            _ => {
-                self.transcode_sessions
-                    .lock()
-                    .unwrap()
-                    .remove(&req.rating_key);
+        {
+            let mut sessions = self.transcode_sessions.lock().unwrap();
+            match (&decision.session, decision.kind.is_transcode_like()) {
+                (Some(psid), true) => {
+                    sessions.insert(req.rating_key.clone(), psid.clone());
+                }
+                _ => {
+                    sessions.remove(&req.rating_key);
+                }
             }
         }
         Ok(decision)
