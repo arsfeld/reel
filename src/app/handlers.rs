@@ -230,6 +230,13 @@ fn quality_and_force(app: &App) -> (crate::models::playback::QualitySelection, b
 /// Re-resolve the current title at a new quality/offset (U8 switch + seek-reload,
 /// U10 track change). Tags the resolve with a fresh switch epoch so a superseded
 /// switch's result is discarded.
+/// Whether a source backend resolves playback through a server-side decision
+/// (quality ladder, transcode, decision indicator). Plex and Jellyfin both do;
+/// `Local` plays the file directly. Pure so the gate is testable without GTK.
+pub fn supports_server_decision(source_type: SourceType) -> bool {
+    matches!(source_type, SourceType::Plex | SourceType::Jellyfin)
+}
+
 fn resolve_playback_at(
     app: &mut App,
     quality: crate::models::playback::QualitySelection,
@@ -240,7 +247,7 @@ fn resolve_playback_at(
     let (Some(item), Some(source)) = (app.now_playing.clone(), app.now_playing_source()) else {
         return;
     };
-    if item.source_type != SourceType::Plex || item.file_path.is_none() {
+    if !supports_server_decision(item.source_type) || item.file_path.is_none() {
         return;
     }
     let req = crate::models::playback::PlaybackRequest {
@@ -434,12 +441,12 @@ fn begin_initial_playback(
         return;
     }
 
-    // For a streamed Plex item, route through the transcode decision instead of
-    // the eager direct-play URL. The decision is async, so SetUrl is deferred to
-    // PlaybackResolved. Non-Plex sources keep the direct URL.
-    let plex_item =
-        media_item.filter(|i| i.source_type == SourceType::Plex && i.file_path.is_some());
-    let (Some(item), Some(source)) = (plex_item, app.now_playing_source()) else {
+    // For a streamed Plex/Jellyfin item, route through the server-side playback
+    // decision instead of the eager direct-play URL. The decision is async, so
+    // SetUrl is deferred to PlaybackResolved. Local sources keep the direct URL.
+    let decision_item =
+        media_item.filter(|i| supports_server_decision(i.source_type) && i.file_path.is_some());
+    let (Some(item), Some(source)) = (decision_item, app.now_playing_source()) else {
         app.video_player.emit(VideoPlayerMsg::SetUrl {
             url: Some(url),
             resume_secs,
@@ -723,6 +730,13 @@ pub fn handle_connection_saved(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_decision_gate_admits_plex_and_jellyfin_only() {
+        assert!(supports_server_decision(SourceType::Plex));
+        assert!(supports_server_decision(SourceType::Jellyfin));
+        assert!(!supports_server_decision(SourceType::Local));
+    }
 
     #[test]
     fn completed_with_existing_file_plays_local() {
