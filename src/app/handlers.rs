@@ -147,8 +147,21 @@ pub fn handle_video_output(
                     sender,
                 );
             }
+            let played_id = app.now_playing.as_ref().map(|i| i.id.clone());
             app.now_playing = None;
             let watch_data = load_watch_data(&app.db);
+            // R8: reflect the just-saved progress in the session cache so a revisit
+            // to this item's library/Home shows it immediately, before any
+            // background revalidation.
+            if let Some(id) = played_id {
+                let watched = watch_data.get(&id).map(|&(_, w)| w).unwrap_or(false);
+                let position_ms = if watched {
+                    None
+                } else {
+                    Some((app.last_position * 1000.0).max(0.0) as i64)
+                };
+                app.note_local_watch_mutation(&id, watched, position_ms);
+            }
             app.library_view
                 .emit(LibraryViewMsg::SetWatchData(watch_data));
             if app.current_view == CurrentView::Player {

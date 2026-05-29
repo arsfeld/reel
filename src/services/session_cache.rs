@@ -319,6 +319,49 @@ impl SessionContentCache {
             self.bump_source_set_epoch();
         }
     }
+
+    /// Patch the watch state of `id` across every cached library entry and the
+    /// Home payload (R8), so a revisit right after playback shows fresh progress
+    /// without waiting on background revalidation. Returns true if any cached
+    /// item was touched.
+    pub fn patch_watch_state(&mut self, id: &str, watched: bool, position_ms: Option<i64>) -> bool {
+        let mut touched = false;
+        for entry in self.library.values_mut() {
+            for item in entry.items.iter_mut() {
+                touched |= patch_item(item, id, watched, position_ms);
+            }
+        }
+        if let Some(home) = self.home.as_mut() {
+            for (item, _) in home.continue_watching.iter_mut() {
+                touched |= patch_item(item, id, watched, position_ms);
+            }
+            for (_, items) in home.recently_added.iter_mut() {
+                for item in items.iter_mut() {
+                    touched |= patch_item(item, id, watched, position_ms);
+                }
+            }
+            for item in home.collections.iter_mut() {
+                touched |= patch_item(item, id, watched, position_ms);
+            }
+            for hub in home.hubs.iter_mut() {
+                for item in hub.items.iter_mut() {
+                    touched |= patch_item(item, id, watched, position_ms);
+                }
+            }
+        }
+        touched
+    }
+}
+
+/// Overwrite `item`'s watch fields when its id matches. Returns whether it did.
+fn patch_item(item: &mut MediaItem, id: &str, watched: bool, position_ms: Option<i64>) -> bool {
+    if item.id == id {
+        item.watched = watched;
+        item.playback_position_ms = position_ms;
+        true
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -561,6 +604,39 @@ mod tests {
         assert!(c.contains_library("plex:srvA:1"));
         assert!(c.contains_library("plex:srvB:1"));
         assert!(c.get_home("plex:srvA|plex:srvB").is_some());
+    }
+
+    #[test]
+    fn patch_watch_state_updates_library_and_home_entries() {
+        let mut c = SessionContentCache::with_capacity(10);
+        c.put_library("plex:srv:1", items(&["x", "y"]));
+        c.set_home(CachedHome {
+            source_set_key: "plex:srv".into(),
+            continue_watching: vec![(item("x"), "Plex".into())],
+            recently_added: vec![("Movies".into(), items(&["x"]))],
+            collections: Vec::new(),
+            hubs: Vec::new(),
+            epoch: 0,
+        });
+        let touched = c.patch_watch_state("x", true, Some(12_345));
+        assert!(touched);
+        // Library entry patched.
+        let lib = c.peek_library("plex:srv:1").unwrap();
+        let x = lib.iter().find(|i| i.id == "x").unwrap();
+        assert!(x.watched && x.playback_position_ms == Some(12_345));
+        // Untouched sibling stays unwatched.
+        assert!(!lib.iter().find(|i| i.id == "y").unwrap().watched);
+        // Home CW + recently-added patched too.
+        let home = c.get_home("plex:srv").unwrap();
+        assert!(home.continue_watching[0].0.watched);
+        assert!(home.recently_added[0].1[0].watched);
+    }
+
+    #[test]
+    fn patch_watch_state_absent_id_touches_nothing() {
+        let mut c = SessionContentCache::new();
+        c.put_library("plex:srv:1", items(&["x"]));
+        assert!(!c.patch_watch_state("absent", true, None));
     }
 
     #[test]

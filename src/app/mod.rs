@@ -158,6 +158,12 @@ pub struct App {
     /// Session-scoped content cache for library + Home views, so navigating back
     /// to a previously-opened view renders instantly instead of re-fetching.
     content_cache: SessionContentCache,
+    /// Monotonic counter for local watch-state mutations (mark watched, playback
+    /// progress). Background revalidation captures this at dispatch and uses it
+    /// to protect a racing local change from a stale refetch (KTD-4).
+    content_mutation_seq: u64,
+    /// Per-item sequence at its last local watch mutation.
+    content_last_mutation: std::collections::HashMap<String, u64>,
 }
 
 impl App {
@@ -264,6 +270,18 @@ impl App {
             .map(|e| (e.source_type, e.source_id.clone()))
             .collect();
         SessionContentCache::source_set_key(&sources)
+    }
+
+    /// Record a local watch-state change (R8): stamp it with the next mutation
+    /// sequence and patch every cached entry so an immediate revisit shows it,
+    /// without waiting on background revalidation. The sequence lets a later
+    /// revalidation tell a racing local change from a stale server read (KTD-4).
+    fn note_local_watch_mutation(&mut self, id: &str, watched: bool, position_ms: Option<i64>) {
+        self.content_mutation_seq += 1;
+        self.content_last_mutation
+            .insert(id.to_string(), self.content_mutation_seq);
+        self.content_cache
+            .patch_watch_state(id, watched, position_ms);
     }
 
     /// Register a freshly-built source and add it to the sidebar as its own
@@ -920,6 +938,8 @@ impl Component for App {
             current_subtitle_stream_id: None,
             can_render_10bit,
             content_cache: SessionContentCache::new(),
+            content_mutation_seq: 0,
+            content_last_mutation: std::collections::HashMap::new(),
         };
 
         // Reconcile downloads against disk and rebuild the queue (no transfers
@@ -1404,6 +1424,8 @@ impl Component for App {
                         AppCmd::Noop
                     });
                 }
+                // R8: patch cached entries so a revisit shows it immediately.
+                self.note_local_watch_mutation(&item.id, true, None);
                 // Refresh watch data
                 let watch_data = load_watch_data(&self.db);
                 self.library_view
@@ -1433,6 +1455,8 @@ impl Component for App {
                         AppCmd::Noop
                     });
                 }
+                // R8: patch cached entries so a revisit shows it immediately.
+                self.note_local_watch_mutation(&item.id, false, None);
                 // Refresh watch data
                 let watch_data = load_watch_data(&self.db);
                 self.library_view
