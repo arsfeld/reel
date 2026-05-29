@@ -4,6 +4,7 @@ pub mod convert;
 pub mod error;
 pub mod models;
 pub mod source;
+pub mod transcode_profile;
 
 #[cfg(test)]
 mod e2e_tests;

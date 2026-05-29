@@ -21,10 +21,10 @@ use crate::services::plex::source::PlexSource;
 /// Build a live `MediaSource` from a persisted source row. Returns `None` for
 /// source types that have no networked backend (e.g. `Local`).
 ///
-/// `is_remote` carries the connection-type classification (U2/R6) onto the Plex
-/// client so Auto playback applies the default bitrate cap on a remote/relay
-/// connection. Session-only (never persisted, KTD6) and irrelevant to non-Plex
-/// sources.
+/// `is_remote` carries the connection-type classification onto the Plex and
+/// Jellyfin clients so Auto playback applies the default bitrate cap on a
+/// remote/relay connection. Session-only (never persisted) and irrelevant to
+/// `Local` sources.
 pub fn build_source(source: &Source, is_remote: bool) -> Option<Arc<dyn MediaSource>> {
     match source.source_type {
         SourceType::Plex => {
@@ -40,7 +40,8 @@ pub fn build_source(source: &Source, is_remote: bool) -> Option<Arc<dyn MediaSou
                 &source.config.token,
                 &user_id,
                 &device_id,
-            );
+            )
+            .with_remote(is_remote);
             Some(Arc::new(JellyfinSource::new(client, source.name.clone())))
         }
         SourceType::Local => None,
