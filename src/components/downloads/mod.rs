@@ -1,8 +1,9 @@
-//! The Downloads view: offline downloads as standalone movie rows and grouped
-//! show rows (aggregate "6/10 episodes" + per-episode state), with per-item and
-//! per-group actions. Renders entirely from persisted repo state, so it works
-//! with no source reachable (R16). Row derivation is pure (see [`row`]); this
-//! component only turns rows into widgets and relays user actions.
+//! The Downloads view: offline downloads as a grid of poster cards — one card
+//! per standalone movie and one aggregate card per show (with "6/10 episodes"
+//! status), each with status + progress overlaid and per-item / per-group
+//! actions revealed on hover. Renders entirely from persisted repo state, so it
+//! works with no source reachable (R16). Row derivation is pure (see [`row`]);
+//! this component only turns rows into cards and relays user actions.
 
 pub mod row;
 
@@ -27,15 +28,15 @@ const CARD_H: i32 = 240;
 const POSTER_REQ_W: u32 = 320;
 const POSTER_REQ_H: u32 = 480;
 
-/// GTK widget handles for a rendered row, kept so progress ticks and arriving
-/// artwork can update the row in place without rebuilding the whole listbox.
+/// GTK widget handles for a rendered card, kept so progress ticks and arriving
+/// artwork can update the card in place without rebuilding the whole grid.
 struct RowWidgets {
     picture: gtk::Picture,
     placeholder: gtk::Image,
-    /// The artwork URL this row's poster was requested at, used to match an
+    /// The artwork URL this card's poster was requested at, used to match an
     /// arriving [`DownloadsViewMsg::ArtworkReady`].
     poster_url: Option<String>,
-    /// Present for item rows (movies/episodes); `None` for group headers.
+    /// Present for item cards (movies/episodes); `None` for show cards.
     progress_bar: Option<gtk::ProgressBar>,
     status_label: Option<gtk::Label>,
 }
@@ -71,8 +72,8 @@ pub struct DownloadsView {
     /// In-memory texture cache keyed by artwork URL, so a rebuild reuses already
     /// loaded posters instead of re-fetching (mirrors the library grid).
     texture_cache: HashMap<String, gtk::gdk::Texture>,
-    /// Per-row widget handles for in-place progress/poster updates. Keyed by
-    /// `media_item_id` for item rows and by `group_id` for group headers.
+    /// Per-card widget handles for in-place progress/poster updates. Keyed by
+    /// `media_item_id` for item cards and by `group_id` for show cards.
     row_widgets: HashMap<String, RowWidgets>,
 }
 
@@ -140,6 +141,10 @@ pub enum DownloadsViewOutput {
         media_item_id: String,
         action: DownloadItemAction,
     },
+    /// Open the detail page for the clicked card. Carries a `media_item_id`:
+    /// a movie's own id, or (for a show card) any member episode's id — the app
+    /// resolves an episode up to its parent show.
+    OpenDetail(String),
 }
 
 #[relm4::component(pub)]
@@ -426,6 +431,9 @@ impl DownloadsView {
             ));
         }
 
+        // Click the poster (anywhere but the action buttons) to open its detail.
+        attach_open_gesture(&card.container, &item.media_item_id, sender);
+
         self.row_widgets.insert(
             item.media_item_id.clone(),
             RowWidgets {
@@ -504,6 +512,12 @@ impl DownloadsView {
         });
         card.actions.append(&del);
 
+        // Click the show poster to open its detail. Episodes are non-empty by
+        // construction; the app resolves the episode id up to its parent show.
+        if let Some(ep) = episodes.first() {
+            attach_open_gesture(&card.container, &ep.media_item_id, sender);
+        }
+
         self.row_widgets.insert(
             group_id.to_string(),
             RowWidgets {
@@ -517,6 +531,24 @@ impl DownloadsView {
 
         card.container
     }
+}
+
+/// Attach a click gesture that opens the card's detail page. Lives on the card
+/// container, so a click anywhere on the poster or title navigates; the action
+/// buttons sit in front and claim their own clicks, so they never navigate.
+fn attach_open_gesture(
+    widget: &impl IsA<gtk::Widget>,
+    media_item_id: &str,
+    sender: &ComponentSender<DownloadsView>,
+) {
+    let click = gtk::GestureClick::new();
+    let out = sender.output_sender().clone();
+    let id = media_item_id.to_string();
+    click.connect_released(move |gesture, _n_press, _x, _y| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        let _ = out.send(DownloadsViewOutput::OpenDetail(id.clone()));
+    });
+    widget.add_controller(click);
 }
 
 /// The action buttons appropriate for a download state.
@@ -690,6 +722,10 @@ fn build_poster_card(title: &str) -> PosterCard {
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
         .width_request(CARD_W)
+        // Keep the card at its natural width, centered in its grid cell —
+        // without this it fills (and stretches) the homogeneous FlowBox cell.
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Start)
         .css_classes(["media-card"])
         .build();
     container.append(&frame);
