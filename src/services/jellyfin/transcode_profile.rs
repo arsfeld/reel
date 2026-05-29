@@ -128,8 +128,11 @@ mod tests {
 
     #[test]
     fn original_has_no_resolution_cap_and_no_bitrate() {
-        let (profile, max) =
-            device_profile(QualitySelection::Manual(QualityPreset::Original), true, false);
+        let (profile, max) = device_profile(
+            QualitySelection::Manual(QualityPreset::Original),
+            true,
+            false,
+        );
         assert_eq!(max, None);
         assert!(profile["MaxStreamingBitrate"].is_null());
         // No Width/Height conditions for Original.
@@ -139,8 +142,11 @@ mod tests {
 
     #[test]
     fn manual_720p_caps_resolution_and_bitrate() {
-        let (profile, max) =
-            device_profile(QualitySelection::Manual(QualityPreset::P720Mbps4), true, false);
+        let (profile, max) = device_profile(
+            QualitySelection::Manual(QualityPreset::P720Mbps4),
+            true,
+            false,
+        );
         assert_eq!(max, Some(4_000_000));
         assert_eq!(profile["MaxStreamingBitrate"], json!(4_000_000u64));
         let widths = conditions_for_property(&profile, "Width");

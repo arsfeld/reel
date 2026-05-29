@@ -422,7 +422,10 @@ fn set_download_flag(playbin: &gst::Element) -> bool {
 /// Render failures drive the transcode fallback (U4); transport errors don't.
 fn is_render_failure(err: &glib::Error) -> bool {
     err.kind::<gst::StreamError>().is_some()
-        || matches!(err.kind::<gst::CoreError>(), Some(gst::CoreError::Negotiation))
+        || matches!(
+            err.kind::<gst::CoreError>(),
+            Some(gst::CoreError::Negotiation)
+        )
 }
 
 pub(crate) fn make_element(name: &str) -> Option<gst::Element> {

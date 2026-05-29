@@ -108,7 +108,9 @@ mod tests {
             }
             None => {
                 // GL elements unavailable in this environment — graceful degrade.
-                assert!(make_element("glupload").is_none() || make_element("glcolorconvert").is_none());
+                assert!(
+                    make_element("glupload").is_none() || make_element("glcolorconvert").is_none()
+                );
             }
         }
     }
