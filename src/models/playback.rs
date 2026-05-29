@@ -357,8 +357,9 @@ mod tests {
 
     #[test]
     fn redact_masks_jellyfin_api_key_direct_play() {
-        let masked =
-            redact_plex_token("https://h/Videos/x/stream?static=true&mediaSourceId=s&api_key=jfsecret");
+        let masked = redact_plex_token(
+            "https://h/Videos/x/stream?static=true&mediaSourceId=s&api_key=jfsecret",
+        );
         assert!(!masked.contains("jfsecret"));
         assert!(masked.contains("api_key=REDACTED"));
         assert!(masked.contains("mediaSourceId=s"));

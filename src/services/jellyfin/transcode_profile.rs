@@ -123,7 +123,8 @@ mod tests {
 
     #[test]
     fn original_has_no_resolution_cap_and_no_bitrate() {
-        let (profile, max) = device_profile(QualitySelection::Manual(QualityPreset::Original), true);
+        let (profile, max) =
+            device_profile(QualitySelection::Manual(QualityPreset::Original), true);
         assert_eq!(max, None);
         assert!(profile["MaxStreamingBitrate"].is_null());
         // No Width/Height conditions for Original.

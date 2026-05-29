@@ -357,7 +357,13 @@ impl MediaSource for JellyfinSource {
         match existing {
             Some(session_id) => {
                 self.client
-                    .report_progress(rating_key, &session_id, position_ticks, is_paused, play_method)
+                    .report_progress(
+                        rating_key,
+                        &session_id,
+                        position_ticks,
+                        is_paused,
+                        play_method,
+                    )
                     .await?;
             }
             None => {
@@ -385,7 +391,13 @@ impl MediaSource for JellyfinSource {
                     .unwrap()
                     .insert(rating_key.to_string(), session_id.clone());
                 self.client
-                    .report_progress(rating_key, &session_id, position_ticks, is_paused, play_method)
+                    .report_progress(
+                        rating_key,
+                        &session_id,
+                        position_ticks,
+                        is_paused,
+                        play_method,
+                    )
                     .await?;
             }
         }
@@ -594,7 +606,10 @@ mod tests {
             .await;
         let src = wm_source(&server.uri());
         let hubs = src.hubs().await.unwrap();
-        let ids: Vec<&str> = hubs.iter().filter_map(|h| h.identifier.as_deref()).collect();
+        let ids: Vec<&str> = hubs
+            .iter()
+            .filter_map(|h| h.identifier.as_deref())
+            .collect();
         assert!(ids.contains(&"jellyfin.latest"));
         assert!(ids.contains(&"jellyfin.nextup"));
         assert!(ids.contains(&"jellyfin.suggestions"));
@@ -612,7 +627,9 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/Shows/NextUp"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"Items": []})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"Items": []})),
+            )
             .mount(&server)
             .await;
         Mock::given(method("GET"))
@@ -622,7 +639,10 @@ mod tests {
             .await;
         let src = wm_source(&server.uri());
         let hubs = src.hubs().await.unwrap();
-        let ids: Vec<&str> = hubs.iter().filter_map(|h| h.identifier.as_deref()).collect();
+        let ids: Vec<&str> = hubs
+            .iter()
+            .filter_map(|h| h.identifier.as_deref())
+            .collect();
         assert_eq!(ids, vec!["jellyfin.latest"]); // next_up empty, suggestions 404 -> both dropped
     }
 
