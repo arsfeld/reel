@@ -335,25 +335,31 @@ impl JellyfinClient {
         item_id: &str,
         play_session_id: &str,
         position_ticks: i64,
+        play_method: &str,
     ) -> Result<(), JellyfinError> {
         let url = format!("{}/Sessions/Playing", self.base_url);
         let body = serde_json::json!({
             "ItemId": item_id,
             "PlaySessionId": play_session_id,
             "PositionTicks": position_ticks,
+            "PlayMethod": play_method,
             "CanSeek": true,
         });
         self.post_json(&url, &body).await?;
         Ok(())
     }
 
-    /// Report ongoing playback progress. `POST /Sessions/Playing/Progress`.
+    /// Report ongoing playback progress. `POST /Sessions/Playing/Progress`. Also
+    /// keeps a transcode session alive server-side (Jellyfin pings the encoder on
+    /// progress), so `play_method` must be `"Transcode"` for transcoded playback
+    /// or the server rejects the report.
     pub async fn report_progress(
         &self,
         item_id: &str,
         play_session_id: &str,
         position_ticks: i64,
         is_paused: bool,
+        play_method: &str,
     ) -> Result<(), JellyfinError> {
         let url = format!("{}/Sessions/Playing/Progress", self.base_url);
         let body = serde_json::json!({
@@ -361,6 +367,7 @@ impl JellyfinClient {
             "PlaySessionId": play_session_id,
             "PositionTicks": position_ticks,
             "IsPaused": is_paused,
+            "PlayMethod": play_method,
             "EventName": "timeupdate",
         });
         self.post_json(&url, &body).await?;
@@ -382,6 +389,62 @@ impl JellyfinClient {
         });
         self.post_json(&url, &body).await?;
         Ok(())
+    }
+
+    /// Keep a transcode session alive (R5). `POST /Sessions/Playing/Ping`.
+    /// Single short attempt — a missed ping is recovered by the next keepalive
+    /// tick. Bypasses the retrying `request_factory` (lifecycle, not hot-path).
+    pub async fn ping_session(&self, play_session_id: &str) -> Result<(), JellyfinError> {
+        let url = format!(
+            "{}/Sessions/Playing/Ping?playSessionId={}",
+            self.base_url, play_session_id
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .timeout(std::time::Duration::from_secs(3))
+            .body(Vec::<u8>::new())
+            .send()
+            .await?;
+        Self::check_status(&resp)
+    }
+
+    /// Kill the active transcode encoder for a session (R5).
+    /// `DELETE /Videos/ActiveEncodings?deviceId=&playSessionId=`. Both params are
+    /// required (jellyfin-kodi#557). A 404/204 means the session already ended —
+    /// treated as success.
+    pub async fn stop_active_encoding(&self, play_session_id: &str) -> Result<(), JellyfinError> {
+        let url = format!(
+            "{}/Videos/ActiveEncodings?deviceId={}&playSessionId={}",
+            self.base_url, self.device_id, play_session_id
+        );
+        const ATTEMPTS: u32 = 3;
+        let mut last: Option<JellyfinError> = None;
+        for _ in 0..ATTEMPTS {
+            match self
+                .http
+                .delete(&url)
+                .timeout(std::time::Duration::from_secs(3))
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let s = resp.status();
+                    if s.is_success() || s.as_u16() == 404 {
+                        return Ok(());
+                    }
+                    last = Some(JellyfinError::Server {
+                        status: s.as_u16(),
+                        message: "stop encoding failed".into(),
+                    });
+                }
+                Err(e) => last = Some(e.into()),
+            }
+        }
+        Err(last.unwrap_or(JellyfinError::Server {
+            status: 0,
+            message: "stop encoding failed".into(),
+        }))
     }
 
     /// Mark an item played. `POST /UserPlayedItems/{itemId}?userId=`.
@@ -710,7 +773,7 @@ mod tests {
 
         let c = client(&server.uri());
         let result = c
-            .report_progress("item9", "session1", 10_000_000, false)
+            .report_progress("item9", "session1", 10_000_000, false, "DirectPlay")
             .await;
         assert!(result.is_ok());
     }
@@ -725,7 +788,7 @@ mod tests {
             .await;
 
         let c = client(&server.uri());
-        let result = c.report_playing("item9", "session1", 0).await;
+        let result = c.report_playing("item9", "session1", 0, "DirectPlay").await;
         assert!(result.is_ok());
     }
 
