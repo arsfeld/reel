@@ -74,7 +74,8 @@ pub fn show_preferences(
         .selected(hwdec_mode_to_index(&settings.playback.hwdec_mode))
         .build();
 
-    let hdr_model = gtk::StringList::new(&["Transcode (recommended)", "Direct Play (limited color)"]);
+    let hdr_model =
+        gtk::StringList::new(&["Transcode (recommended)", "Direct Play (limited color)"]);
     let hdr_combo = adw::ComboRow::builder()
         .title("HDR Playback")
         .subtitle("How HDR videos are handled (10-bit SDR always direct-plays)")
