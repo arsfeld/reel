@@ -756,6 +756,51 @@ mod tests {
     }
 
     #[test]
+    fn patch_watch_state_updates_home_hub_items() {
+        use crate::models::hub::MediaHub;
+        let mut c = SessionContentCache::new();
+        c.set_home(CachedHome {
+            source_set_key: "plex:srv".into(),
+            continue_watching: Vec::new(),
+            recently_added: Vec::new(),
+            collections: Vec::new(),
+            hubs: vec![MediaHub {
+                title: "Recommended".into(),
+                identifier: Some("home.recommended".into()),
+                items: items(&["x", "y"]),
+            }],
+            epoch: 0,
+        });
+        assert!(c.patch_watch_state("x", true, Some(99)));
+        let home = c.get_home("plex:srv").unwrap();
+        let x = home.hubs[0].items.iter().find(|i| i.id == "x").unwrap();
+        assert!(x.watched && x.playback_position_ms == Some(99));
+    }
+
+    #[test]
+    fn home_content_eq_detects_hub_change() {
+        use crate::models::hub::MediaHub;
+        let base = || CachedHome {
+            source_set_key: "k".into(),
+            continue_watching: Vec::new(),
+            recently_added: Vec::new(),
+            collections: Vec::new(),
+            hubs: vec![MediaHub {
+                title: "Recommended".into(),
+                identifier: Some("home.recommended".into()),
+                items: items(&["x"]),
+            }],
+            epoch: 0,
+        };
+        let mut changed = base();
+        changed.hubs[0].items[0].watched = true;
+        assert!(
+            !home_content_eq(&base(), &changed),
+            "hub item change detected"
+        );
+    }
+
+    #[test]
     fn patch_watch_state_absent_id_touches_nothing() {
         let mut c = SessionContentCache::new();
         c.put_library("plex:srv:1", items(&["x"]));

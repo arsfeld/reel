@@ -197,13 +197,17 @@ pub fn merge_revalidated(
     last_mutation: &HashMap<String, u64>,
     dispatch_seq: u64,
 ) -> Vec<MediaItem> {
+    // Index cached items by id once (O(n)) so the per-item lookup below is O(1)
+    // rather than a linear scan — O(n^2) on a large library otherwise.
+    let cached_by_id: HashMap<&str, &MediaItem> =
+        cached.iter().map(|c| (c.id.as_str(), c)).collect();
     refetched
         .into_iter()
         .map(|mut item| {
             let racing = last_mutation
                 .get(&item.id)
                 .is_some_and(|&seq| seq > dispatch_seq);
-            if racing && let Some(c) = cached.iter().find(|c| c.id == item.id) {
+            if racing && let Some(c) = cached_by_id.get(item.id.as_str()) {
                 // Keep the local watch fields; everything else stays server-fresh.
                 item.watched = c.watched;
                 item.playback_position_ms = c.playback_position_ms;
@@ -1408,6 +1412,36 @@ mod tests {
         let merged = merge_revalidated(vec![fresh.clone()], &[], &HashMap::new(), 0);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].id, fresh.id);
+    }
+
+    #[test]
+    fn merge_racing_item_absent_from_cache_passes_through_server_state() {
+        // A racing mutation seq exists for an id that is NOT in the cached slice
+        // (e.g. a brand-new server item the user also locally touched): the
+        // refetched/server state must pass through unchanged (no cached copy to
+        // restore from, no panic).
+        let mut refetched = movie("New");
+        refetched.watched = true; // server state
+        let mut last = HashMap::new();
+        last.insert(refetched.id.clone(), 9);
+        let merged = merge_revalidated(vec![refetched.clone()], &[], &last, 1);
+        assert!(
+            merged[0].watched,
+            "server state survives when no cached copy"
+        );
+    }
+
+    #[test]
+    fn merge_racing_preserves_cached_playback_position() {
+        // The racing branch restores BOTH watched and playback_position_ms.
+        let mut cached = movie("Dune");
+        cached.playback_position_ms = Some(123_456);
+        let mut refetched = movie("Dune");
+        refetched.playback_position_ms = Some(0); // stale server offset
+        let mut last = HashMap::new();
+        last.insert(cached.id.clone(), 5);
+        let merged = merge_revalidated(vec![refetched], &[cached.clone()], &last, 3);
+        assert_eq!(merged[0].playback_position_ms, Some(123_456));
     }
 
     #[test]
