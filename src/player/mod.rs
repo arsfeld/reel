@@ -1,5 +1,6 @@
 // Player module — migrated to components::player::video_player.
 
+pub mod capabilities;
 pub mod gst_pipeline;
 pub mod pipeline_msgs;
 pub mod subtitles;
