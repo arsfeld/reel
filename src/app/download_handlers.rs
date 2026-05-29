@@ -11,7 +11,7 @@
 //! [`failure_policy`] so each `FailReason` maps to a distinct recovery posture.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use relm4::ComponentController;
@@ -130,6 +130,81 @@ pub fn new_download_row(
             .poster_path
             .clone()
             .or_else(|| item.series_poster_path.clone()),
+    }
+}
+
+/// Reconstruct a playable [`MediaItem`] from a download's own metadata snapshot.
+/// The inverse of [`new_download_row`]: it carries just enough (id, source,
+/// title, hierarchy, part key) to drive the player and watch tracking with no
+/// source reachable. Fields the snapshot doesn't keep (overview, rating,
+/// resolution, resume offset) come back empty.
+pub fn media_item_from_download(d: &Download) -> MediaItem {
+    MediaItem {
+        id: d.media_item_id.clone(),
+        source_type: d.source_type,
+        source_id: d.source_id.clone(),
+        // The rating key only matters for online playback decisions; a local
+        // file plays without it.
+        external_id: String::new(),
+        media_type: d.media_type,
+        title: d.title.clone(),
+        year: d.year,
+        overview: None,
+        content_rating: None,
+        rating: None,
+        runtime_minutes: None,
+        poster_path: d.poster_path.clone(),
+        series_poster_path: None,
+        backdrop_path: None,
+        genres: Vec::new(),
+        parent_id: d.parent_id.clone(),
+        season_number: d.season_number,
+        episode_number: d.episode_number,
+        air_date: None,
+        file_path: Some(d.part_key.clone()),
+        video_resolution: None,
+        hdr: None,
+        added_at: d.enqueued_at.clone(),
+        updated_at: d
+            .completed_at
+            .clone()
+            .unwrap_or_else(|| d.enqueued_at.clone()),
+        playback_position_ms: None,
+        watched: false,
+        library_section_id: None,
+    }
+}
+
+/// What clicking a download's card should do, decided from the persisted row.
+pub enum PlayDownloadOutcome {
+    /// Play this local file with the reconstructed item.
+    Play { url: String, item: Box<MediaItem> },
+    /// The row is complete but its file is gone from disk.
+    FileMissing,
+    /// Nothing playable yet (still downloading, failed, or unknown id).
+    NotReady,
+}
+
+/// Resolve a download id to a local-file play. A completed row whose file is on
+/// disk plays straight from `file://`; everything else is non-playable. Keeps
+/// the DB lookup out of `update()`.
+pub fn resolve_play_download(app: &App, media_item_id: &str) -> PlayDownloadOutcome {
+    let Some(db) = app.db.as_ref() else {
+        return PlayDownloadOutcome::NotReady;
+    };
+    let row = db
+        .with(|conn| DownloadsRepo::new(conn).find(media_item_id))
+        .ok()
+        .flatten();
+    match row {
+        Some(d) if d.state == DownloadState::Completed => match d.file_path.as_deref() {
+            Some(path) if Path::new(path).exists() => PlayDownloadOutcome::Play {
+                url: format!("file://{path}"),
+                item: Box::new(media_item_from_download(&d)),
+            },
+            _ => PlayDownloadOutcome::FileMissing,
+        },
+        _ => PlayDownloadOutcome::NotReady,
     }
 }
 
@@ -325,24 +400,30 @@ fn persist_state(
 
 /// Resolve the transfer arguments for a queued item from its repo row.
 fn resolve_transfer(app: &App, media_item_id: &str, part_key: &str) -> Option<TransferParams> {
-    // Resolve the owning source from the item (the multi-source registry keys on
-    // each item's own source_type/source_id), so the transfer URL points at the
-    // server that actually holds this media.
-    let item = app.db.as_ref()?.with(|conn| {
-        crate::db::media_repo::MediaRepo::new(conn)
-            .find_by_id(media_item_id)
-            .ok()
-            .flatten()
-    })?;
-    let source = app.sources.for_item(&item)?;
+    // The persisted download row carries everything needed to fetch — source,
+    // validator, size — so a download resolves even when the item was never
+    // synced into the library table (e.g. opened from a hub or search). The
+    // multi-source registry keys on the row's own source_type/source_id, so the
+    // transfer URL points at the server that actually holds this media. (Downloads
+    // are deliberately self-contained: there is no FK to media_items.)
+    let row = match with_repo(app, |repo| repo.find(media_item_id)) {
+        Some(Ok(Some(row))) => row,
+        _ => {
+            warn!("Cannot resolve download {media_item_id}: no download row in repo");
+            return None;
+        }
+    };
+    let Some(source) = app.sources.get(row.source_type, &row.source_id) else {
+        warn!(
+            "Cannot resolve download {media_item_id}: no connected source for {:?}/{}",
+            row.source_type, row.source_id
+        );
+        return None;
+    };
     let folder = app.settings.downloads.effective_folder();
     let media_path = confined_media_path(&folder, media_item_id, part_key)
         .map_err(|e| warn!("Refusing unsafe download path: {e}"))
         .ok()?;
-    let row = match with_repo(app, |repo| repo.find(media_item_id)) {
-        Some(Ok(Some(row))) => row,
-        _ => return None,
-    };
     Some(TransferParams {
         media_item_id: media_item_id.to_string(),
         url: source.playback_url(part_key),
@@ -367,7 +448,9 @@ fn apply_events(app: &mut App, events: Vec<DownloadEvent>) {
                     app.downloads.spawn(params);
                 } else {
                     // Couldn't resolve (no source / bad path): mark failed so the
-                    // slot frees and the user can retry.
+                    // slot frees and the user can retry. The specific reason was
+                    // already logged by `resolve_transfer`.
+                    warn!("Marking {media_item_id} failed: transfer could not be resolved");
                     let reschedule = app.downloads.queue.mark_failed(&media_item_id);
                     persist_state(
                         &app.db,

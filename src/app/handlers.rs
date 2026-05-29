@@ -4,7 +4,7 @@ use std::time::Instant;
 use adw::prelude::*;
 
 use relm4::prelude::*;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::components::library::LibraryViewMsg;
 use crate::components::player::video_player::{VideoPlayerMsg, VideoPlayerOutput};
@@ -341,6 +341,14 @@ pub fn handle_play_media(
         let source_offset = item.resume_position_secs();
         let (offline_pending, local_tracked) = match app.db.as_ref() {
             Some(db) => db.with(|conn| {
+                // Persist the item being played so the watch_progress /
+                // pending_sync foreign keys (-> media_items.id) resolve. Items
+                // browsed on-demand from a source are otherwise only in memory,
+                // never having gone through a library sync, so a later progress
+                // write would hit a FOREIGN KEY constraint failure.
+                if let Err(e) = crate::db::media_repo::MediaRepo::new(conn).upsert(item) {
+                    warn!("Failed to persist media item before playback: {e}");
+                }
                 let offline = DownloadsRepo::new(conn)
                     .latest_pending_sync_for(&item.id)
                     .ok()

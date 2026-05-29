@@ -357,6 +357,12 @@ pub enum AppMsg {
     /// `media_item_id` (a movie's, or an episode's) to a `MediaItem` from the
     /// local DB — episodes route to their parent show.
     OpenDownloadDetail(String),
+    /// Play a completed download straight from its local file, reconstructing a
+    /// `MediaItem` from the download's own metadata snapshot so it works with no
+    /// source reachable. Carries the download's `media_item_id`.
+    PlayDownload(String),
+    /// The library poster density changed; mirror it onto the Downloads grid.
+    SetGridDensity(crate::services::library_filter::GridDensity),
     GoBack,
     VideoOutput(VideoPlayerOutput),
     PlayMedia {
@@ -587,6 +593,7 @@ impl Component for App {
                 LibraryViewOutput::SaveLibraryUiState { library_id, state } => {
                     AppMsg::SaveLibraryUiState { library_id, state }
                 }
+                LibraryViewOutput::DensityChanged(d) => AppMsg::SetGridDensity(d),
             },
         );
 
@@ -634,6 +641,9 @@ impl Component for App {
                 },
                 DownloadsViewOutput::OpenDetail(media_item_id) => {
                     AppMsg::OpenDownloadDetail(media_item_id)
+                }
+                DownloadsViewOutput::PlayDownload(media_item_id) => {
+                    AppMsg::PlayDownload(media_item_id)
                 }
             },
         );
@@ -903,6 +913,28 @@ impl Component for App {
                         sender.input(AppMsg::ShowToast("Details unavailable offline".to_string()));
                     }
                 }
+            }
+            AppMsg::PlayDownload(media_item_id) => {
+                match download_handlers::resolve_play_download(self, &media_item_id) {
+                    download_handlers::PlayDownloadOutcome::Play { url, item } => {
+                        sender.input(AppMsg::PlayMedia {
+                            url,
+                            media_item: Some(*item),
+                        });
+                    }
+                    download_handlers::PlayDownloadOutcome::FileMissing => {
+                        sender.input(AppMsg::ShowToast(
+                            "This download's file is missing.".to_string(),
+                        ));
+                    }
+                    // Still transferring (or failed): the card only plays once
+                    // complete, so there's nothing to do here.
+                    download_handlers::PlayDownloadOutcome::NotReady => {}
+                }
+            }
+            AppMsg::SetGridDensity(density) => {
+                self.downloads_view
+                    .emit(DownloadsViewMsg::SetDensity(density));
             }
             AppMsg::GoBack => {
                 if self.stack.visible_child_name().as_deref() == Some("player") {

@@ -33,6 +33,9 @@ pub struct MediaCardData {
     pub picture_widget: Option<gtk::Picture>,
     /// Direct reference to the placeholder icon widget.
     pub placeholder_widget: Option<gtk::Image>,
+    /// Direct reference to the downloaded-badge widget, so the downloaded set
+    /// can be updated in place without a full grid rebuild.
+    pub downloaded_widget: Option<gtk::Image>,
 }
 
 impl MediaCardData {
@@ -55,6 +58,7 @@ impl MediaCardData {
             downloaded: false,
             picture_widget: None,
             placeholder_widget: None,
+            downloaded_widget: None,
         }
     }
 
@@ -77,7 +81,7 @@ pub struct MediaCardWidgets {
     rating_badge: gtk::Label,
     content_rating_badge: gtk::Label,
     progress_bar: gtk::ProgressBar,
-    watched_icon: gtk::Image,
+    unwatched_dot: gtk::Box,
     downloaded_icon: gtk::Image,
 }
 
@@ -104,7 +108,7 @@ struct PosterOverlay {
     rating_badge: gtk::Label,
     content_rating_badge: gtk::Label,
     progress_bar: gtk::ProgressBar,
-    watched_icon: gtk::Image,
+    unwatched_dot: gtk::Box,
     downloaded_icon: gtk::Image,
 }
 
@@ -128,12 +132,12 @@ fn build_poster_overlay() -> PosterOverlay {
         .visible(false)
         .build();
 
-    // Resolution badge (top-right)
+    // Resolution badge (top-right, offset left to clear the unwatched dot)
     let resolution_badge = gtk::Label::builder()
         .halign(gtk::Align::End)
         .valign(gtk::Align::Start)
         .margin_top(8)
-        .margin_end(8)
+        .margin_end(28)
         .css_classes(["media-badge", "resolution-badge"])
         .visible(false)
         .build();
@@ -166,15 +170,17 @@ fn build_poster_overlay() -> PosterOverlay {
         .visible(false)
         .build();
 
-    // Watched checkmark (bottom-right of poster)
-    let watched_icon = gtk::Image::builder()
-        .icon_name("emblem-ok-symbolic")
-        .pixel_size(20)
+    // Unwatched dot (top-right of poster, Infuse-style). Marks items that
+    // have NOT been watched and have no resume progress; watched items show
+    // nothing at all.
+    let unwatched_dot = gtk::Box::builder()
         .halign(gtk::Align::End)
-        .valign(gtk::Align::End)
-        .margin_bottom(8)
-        .margin_end(8)
-        .css_classes(["watched-indicator"])
+        .valign(gtk::Align::Start)
+        .margin_top(10)
+        .margin_end(10)
+        .width_request(12)
+        .height_request(12)
+        .css_classes(["unwatched-indicator"])
         .visible(false)
         .build();
 
@@ -199,7 +205,7 @@ fn build_poster_overlay() -> PosterOverlay {
     overlay.add_overlay(&rating_badge);
     overlay.add_overlay(&content_rating_badge);
     overlay.add_overlay(&progress_bar);
-    overlay.add_overlay(&watched_icon);
+    overlay.add_overlay(&unwatched_dot);
     overlay.add_overlay(&downloaded_icon);
 
     // Wrap overlay in a frame for rounded corners + hover effects
@@ -216,7 +222,7 @@ fn build_poster_overlay() -> PosterOverlay {
         rating_badge,
         content_rating_badge,
         progress_bar,
-        watched_icon,
+        unwatched_dot,
         downloaded_icon,
     }
 }
@@ -243,7 +249,7 @@ impl RelmGridItem for MediaCardData {
             rating_badge,
             content_rating_badge,
             progress_bar,
-            watched_icon,
+            unwatched_dot,
             downloaded_icon,
         } = build_poster_overlay();
 
@@ -277,7 +283,7 @@ impl RelmGridItem for MediaCardData {
             rating_badge,
             content_rating_badge,
             progress_bar,
-            watched_icon,
+            unwatched_dot,
             downloaded_icon,
         };
 
@@ -296,9 +302,11 @@ impl RelmGridItem for MediaCardData {
 
         let has_poster = self.poster_texture.is_some();
 
-        // Save widget references so ArtworkReady can update them directly
+        // Save widget references so ArtworkReady / SetDownloadedIds can update
+        // them directly without re-running bind() or rebuilding the grid.
         self.picture_widget = Some(widgets.picture.clone());
         self.placeholder_widget = Some(widgets.placeholder_icon.clone());
+        self.downloaded_widget = Some(widgets.downloaded_icon.clone());
 
         if let Some(ref texture) = self.poster_texture {
             widgets.picture.set_paintable(Some(texture));
@@ -353,25 +361,21 @@ impl RelmGridItem for MediaCardData {
             widgets.rating_badge.set_visible(false);
         }
 
-        // Watch state indicators
-        if self.watched {
-            // Watched: show checkmark, hide progress bar
-            widgets.watched_icon.set_visible(true);
-            widgets.progress_bar.set_visible(false);
-        } else if let Some(progress) = self.watch_progress {
-            if progress > 0.0 {
-                // In progress: show progress bar, hide checkmark
-                widgets.progress_bar.set_fraction(progress);
-                widgets.progress_bar.set_visible(true);
-                widgets.watched_icon.set_visible(false);
-            } else {
-                widgets.progress_bar.set_visible(false);
-                widgets.watched_icon.set_visible(false);
-            }
+        // Watch state indicators (Infuse-style): mark UNwatched items with a
+        // corner dot, show a resume bar for in-progress items, and leave fully
+        // watched items unadorned.
+        let in_progress = !self.watched && self.watch_progress.is_some_and(|p| p > 0.0);
+        if in_progress {
+            // In progress: show resume bar, no dot.
+            widgets
+                .progress_bar
+                .set_fraction(self.watch_progress.unwrap_or(0.0));
+            widgets.progress_bar.set_visible(true);
+            widgets.unwatched_dot.set_visible(false);
         } else {
-            // No watch data
             widgets.progress_bar.set_visible(false);
-            widgets.watched_icon.set_visible(false);
+            // Unwatched and not started → dot; watched → nothing.
+            widgets.unwatched_dot.set_visible(!self.watched);
         }
 
         // Downloaded indicator (independent of watch state).
