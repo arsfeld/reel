@@ -36,6 +36,9 @@ use super::utils::iso_now;
 /// since the last one, so a fast transfer doesn't flood the GTK loop.
 const PROGRESS_BYTES_DELTA: u64 = 1_048_576; // 1 MiB
 
+/// How long an episode delete can be undone before its files are removed.
+const UNDO_WINDOW_SECS: u32 = 5;
+
 /// A message streamed from a background transfer task back to the GTK loop.
 #[derive(Debug)]
 #[allow(dead_code)] // `total` feeds the U13 progress UI.
@@ -572,6 +575,11 @@ pub fn enqueue_download_episode(app: &mut App, show: &MediaItem, episode: &Media
     use crate::components::detail::episode_download::{DownloadIntent, episode_download_intent};
     use crate::models::download::GroupScope;
 
+    // Re-activating an episode cancels any in-flight undo-delete for it: drop the
+    // pending capture so a lapsing undo timer can't later destroy the row/file we
+    // are about to (re)create.
+    app.pending_deletes.remove(&episode.id);
+
     let existing = with_repo(app, |repo| repo.find(&episode.id))
         .and_then(Result::ok)
         .flatten();
@@ -632,7 +640,13 @@ pub fn enqueue_group(
     for ep in &set {
         enqueue_item(app, ep, Some(group_id.clone()));
     }
-    app.toast(&format!("Downloading {}", parent.title));
+    // A single-episode grab (the per-episode download path) names the episode so
+    // it doesn't read as a whole-show download; a real season grab names the show.
+    if set.len() == 1 {
+        app.toast(&format!("Downloading {}", set[0].title));
+    } else {
+        app.toast(&format!("Downloading {}", parent.title));
+    }
 }
 
 /// Begin an undoable delete (drill-in / Show-detail episode deletes). The row is
@@ -663,20 +677,24 @@ pub fn request_delete_with_undo(
 
     let toast = adw::Toast::new(&format!("Deleted {title}"));
     toast.set_button_label(Some("Undo"));
-    toast.set_timeout(5);
+    toast.set_timeout(UNDO_WINDOW_SECS);
     let s_undo = sender.input_sender().clone();
     let id_undo = media_item_id.to_string();
     toast.connect_button_clicked(move |_| {
         let _ = s_undo.send(super::AppMsg::UndoDeleteDownload(id_undo.clone()));
     });
+    app.toast_overlay.add_toast(toast);
+
+    // Drive finalize off an independent timer, NOT the toast's `dismissed`
+    // signal: a libadwaita `ToastOverlay` shows one toast at a time, so a second
+    // delete would dismiss this toast early and (via `dismissed`) finalize this
+    // delete before its window elapsed — destroying the file ahead of time.
+    // `finalize_delete` no-ops if the undo button already restored the row.
     let s_fin = sender.input_sender().clone();
     let id_fin = media_item_id.to_string();
-    // Fires on timeout AND after the button click; `finalize_delete` no-ops if
-    // the row was already restored by the undo handler (which runs first).
-    toast.connect_dismissed(move |_| {
+    gtk::glib::timeout_add_seconds_local_once(UNDO_WINDOW_SECS, move || {
         let _ = s_fin.send(super::AppMsg::FinalizeDeleteDownload(id_fin.clone()));
     });
-    app.toast_overlay.add_toast(toast);
 }
 
 /// Undo a pending delete: restore the captured row (its files were never
