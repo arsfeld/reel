@@ -41,6 +41,32 @@ struct RowWidgets {
     status_label: Option<gtk::Label>,
 }
 
+/// Which downloads this view renders. `All` is the top-level Downloads tab;
+/// `Group` is the per-show drill-in, which expands one group's episodes into
+/// individual cards instead of a single aggregate card.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DownloadsScope {
+    #[default]
+    All,
+    Group(String),
+}
+
+/// How a delete action is performed. The top-level tab deletes immediately; the
+/// drill-in defers via an undo toast (handled by the app).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DeleteMode {
+    #[default]
+    Immediate,
+    Undo,
+}
+
+/// Launch-time configuration. Defaults to the top-level Downloads tab.
+#[derive(Debug, Clone, Default)]
+pub struct DownloadsConfig {
+    pub scope: DownloadsScope,
+    pub delete_mode: DeleteMode,
+}
+
 /// A user action on a single download. Defined here (the UI layer) and consumed
 /// by the app's download handlers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +104,11 @@ pub struct DownloadsView {
     /// Poster-card size, mirroring the library grid's density so the two grids
     /// match. Updated via [`DownloadsViewMsg::SetDensity`].
     density: GridDensity,
+    /// Which downloads this instance renders: the whole library, or one show's
+    /// episodes expanded into individual cards (the drill-in).
+    scope: DownloadsScope,
+    /// How this instance's delete buttons behave (immediate vs undo).
+    delete_mode: DeleteMode,
     /// True while a grid rebuild is queued on the main-loop idle. A burst of
     /// `SetDownloads` — e.g. a whole season completing, which fires one snapshot
     /// per finished episode — would otherwise tear down and rebuild the entire
@@ -116,6 +147,13 @@ pub enum DownloadsViewMsg {
         media_item_id: String,
         action: DownloadItemAction,
     },
+    /// A delete button was clicked in undo mode (the drill-in): forward a delete
+    /// *request* the app handles with an undo toast, rather than an immediate
+    /// delete.
+    RequestDelete {
+        media_item_id: String,
+        title: String,
+    },
     /// Apply an action to every member of a group (retry-failed / delete / etc).
     GroupAction {
         media_item_ids: Vec<String>,
@@ -144,6 +182,9 @@ impl std::fmt::Debug for DownloadsViewMsg {
                 media_item_id,
                 action,
             } => write!(f, "Action({media_item_id}, {action:?})"),
+            Self::RequestDelete { media_item_id, .. } => {
+                write!(f, "RequestDelete({media_item_id})")
+            }
             Self::GroupAction { action, .. } => write!(f, "GroupAction({action:?})"),
             Self::FlushRebuild => write!(f, "FlushRebuild"),
         }
@@ -162,6 +203,14 @@ pub enum DownloadsViewOutput {
     /// a movie's own id, or (for a show card) any member episode's id — the app
     /// resolves an episode up to its parent show.
     OpenDetail(String),
+    /// Open the per-show drill-in for a group card. Carries the `group_id`.
+    OpenShowDownloads(String),
+    /// Request an undoable delete (drill-in delete buttons). The app shows an
+    /// undo toast and defers the actual file/row removal.
+    RequestDelete {
+        media_item_id: String,
+        title: String,
+    },
     /// Play a completed download straight from its local file, using the
     /// download's own metadata snapshot — works fully offline (R16). Carries the
     /// download's `media_item_id`.
@@ -170,7 +219,7 @@ pub enum DownloadsViewOutput {
 
 #[relm4::component(pub)]
 impl SimpleComponent for DownloadsView {
-    type Init = ();
+    type Init = DownloadsConfig;
     type Input = DownloadsViewMsg;
     type Output = DownloadsViewOutput;
 
@@ -207,7 +256,7 @@ impl SimpleComponent for DownloadsView {
     }
 
     fn init(
-        _init: Self::Init,
+        init: Self::Init,
         root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
@@ -224,6 +273,8 @@ impl SimpleComponent for DownloadsView {
             texture_cache: HashMap::new(),
             row_widgets: HashMap::new(),
             density: GridDensity::default(),
+            scope: init.scope,
+            delete_mode: init.delete_mode,
             rebuild_scheduled: false,
         };
         model.rebuild(&sender);
@@ -284,6 +335,15 @@ impl SimpleComponent for DownloadsView {
                 let _ = sender.output(DownloadsViewOutput::ItemAction {
                     media_item_id,
                     action,
+                });
+            }
+            DownloadsViewMsg::RequestDelete {
+                media_item_id,
+                title,
+            } => {
+                let _ = sender.output(DownloadsViewOutput::RequestDelete {
+                    media_item_id,
+                    title,
                 });
             }
             DownloadsViewMsg::GroupAction {
@@ -351,6 +411,29 @@ impl DownloadsView {
         // Widget handles point at the cards we just dropped; the texture cache
         // stays so reloaded posters appear instantly.
         self.row_widgets.clear();
+
+        // Drill-in: expand one show's episodes into individual cards (each with
+        // its own per-episode actions), instead of the aggregate group card.
+        if let DownloadsScope::Group(gid) = &self.scope {
+            let episodes = derive_rows(&self.downloads, &self.groups)
+                .into_iter()
+                .find_map(|r| match r {
+                    DownloadRow::Group {
+                        group_id, episodes, ..
+                    } if &group_id == gid => Some(episodes),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if episodes.is_empty() {
+                self.grid.append(&empty_card());
+                return;
+            }
+            for ep in &episodes {
+                let card = self.item_card(ep, sender);
+                self.grid.append(&card);
+            }
+            return;
+        }
 
         let rows = derive_rows(&self.downloads, &self.groups);
         if rows.is_empty() {
@@ -476,13 +559,13 @@ impl DownloadsView {
         );
 
         for (icon, tooltip, action) in actions_for_state(item.state) {
-            card.actions.append(&action_button(
-                &item.media_item_id,
-                icon,
-                tooltip,
-                action,
-                sender,
-            ));
+            let btn =
+                if action == DownloadItemAction::Delete && self.delete_mode == DeleteMode::Undo {
+                    delete_undo_button(&item.media_item_id, &item.title, icon, tooltip, sender)
+                } else {
+                    action_button(&item.media_item_id, icon, tooltip, action, sender)
+                };
+            card.actions.append(&btn);
         }
 
         // A completed download plays straight from its local file on click
@@ -571,11 +654,8 @@ impl DownloadsView {
         });
         card.actions.append(&del);
 
-        // Click the show poster to open its detail. Episodes are non-empty by
-        // construction; the app resolves the episode id up to its parent show.
-        if let Some(ep) = episodes.first() {
-            attach_open_gesture(&card.container, &ep.media_item_id, sender);
-        }
+        // Click the show poster to drill into its downloaded episodes.
+        attach_open_show_downloads_gesture(&card.container, group_id, sender);
 
         self.row_widgets.insert(
             group_id.to_string(),
@@ -592,28 +672,29 @@ impl DownloadsView {
     }
 }
 
-/// Attach a click gesture that opens the card's detail page. Lives on the card
-/// container, so a click anywhere on the poster or title navigates; the action
-/// buttons sit in front and claim their own clicks, so they never navigate.
-fn attach_open_gesture(
+/// Attach a click gesture that opens a show's download drill-in. Lives on the
+/// card container, so a click anywhere on the poster or title navigates; the
+/// action buttons sit in front and claim their own clicks, so they never
+/// navigate.
+fn attach_open_show_downloads_gesture(
     widget: &impl IsA<gtk::Widget>,
-    media_item_id: &str,
+    group_id: &str,
     sender: &ComponentSender<DownloadsView>,
 ) {
     let click = gtk::GestureClick::new();
     let out = sender.output_sender().clone();
-    let id = media_item_id.to_string();
+    let id = group_id.to_string();
     click.connect_released(move |gesture, _n_press, _x, _y| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        let _ = out.send(DownloadsViewOutput::OpenDetail(id.clone()));
+        let _ = out.send(DownloadsViewOutput::OpenShowDownloads(id.clone()));
     });
     widget.add_controller(click);
 }
 
 /// Attach a click gesture that plays a completed download from its local file.
-/// Like [`attach_open_gesture`] it lives on the card container, so a click
-/// anywhere but the action buttons starts playback; the buttons claim their own
-/// clicks and never trigger it.
+/// Like [`attach_open_show_downloads_gesture`] it lives on the card container, so
+/// a click anywhere but the action buttons starts playback; the buttons claim
+/// their own clicks and never trigger it.
 fn attach_play_gesture(
     widget: &impl IsA<gtk::Widget>,
     media_item_id: &str,
@@ -688,6 +769,33 @@ fn action_button(
         let _ = s.send(DownloadsViewMsg::Action {
             media_item_id: id.clone(),
             action,
+        });
+    });
+    btn
+}
+
+/// A delete button that requests an *undoable* delete (used by the drill-in):
+/// the app shows an undo toast and defers the actual removal.
+fn delete_undo_button(
+    media_item_id: &str,
+    title: &str,
+    icon: &str,
+    tooltip: &str,
+    sender: &ComponentSender<DownloadsView>,
+) -> gtk::Button {
+    let btn = gtk::Button::builder()
+        .icon_name(icon)
+        .tooltip_text(tooltip)
+        .css_classes(["flat", "circular"])
+        .valign(gtk::Align::Center)
+        .build();
+    let s = sender.input_sender().clone();
+    let id = media_item_id.to_string();
+    let title = title.to_string();
+    btn.connect_clicked(move |_| {
+        let _ = s.send(DownloadsViewMsg::RequestDelete {
+            media_item_id: id.clone(),
+            title: title.clone(),
         });
     });
     btn

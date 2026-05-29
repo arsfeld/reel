@@ -326,8 +326,12 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// Push the current download state and banner flags to the Downloads view.
+    /// Push the current download state and banner flags to the Downloads view,
+    /// the Show detail page (per-episode controls), and the per-show drill-in if
+    /// one is open. All three read the same repo snapshot so they stay
+    /// consistent (R8).
     pub(super) fn refresh_downloads_view(&self) {
+        use crate::components::detail::show_detail::ShowDetailMsg;
         use crate::components::downloads::DownloadsViewMsg;
         let (downloads, groups) = match self.db.as_ref() {
             Some(db) => db.with(|conn| {
@@ -340,11 +344,63 @@ impl App {
             None => (Vec::new(), Vec::new()),
         };
         self.downloads_view.emit(DownloadsViewMsg::SetDownloads {
-            downloads,
-            groups,
+            downloads: downloads.clone(),
+            groups: groups.clone(),
             over_budget_warning: self.downloads.over_budget_warning,
             disk_full: self.downloads.disk_full,
         });
+        // Per-episode download controls on the Show detail page.
+        self.show_detail
+            .emit(ShowDetailMsg::SetDownloadStates(downloads.clone()));
+        // Keep an open drill-in live.
+        if let Some(dd) = self.show_drilldown.as_ref() {
+            dd.emit(DownloadsViewMsg::SetDownloads {
+                downloads,
+                groups,
+                over_budget_warning: self.downloads.over_budget_warning,
+                disk_full: self.downloads.disk_full,
+            });
+        }
+    }
+
+    /// Pop the per-show drill-in when its group has no visible members left
+    /// (e.g. the last episode was deleted). Called after delete/cancel/finalize.
+    pub(super) fn maybe_pop_empty_drilldown(&mut self) {
+        use adw::prelude::*;
+        let Some(gid) = self.drilldown_group.clone() else {
+            return;
+        };
+        let has_members = self
+            .db
+            .as_ref()
+            .map(|db| {
+                db.with(|conn| {
+                    DownloadsRepo::new(conn)
+                        .list_by_group(&gid)
+                        .map(|v| {
+                            v.iter().any(|d| {
+                                !matches!(d.state, DownloadState::Removed | DownloadState::Pruned)
+                            })
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if has_members {
+            return;
+        }
+        // Only pop if the drill-in is actually the visible page.
+        if self
+            .nav_view
+            .visible_page()
+            .and_then(|p| p.tag())
+            .as_deref()
+            == Some("drilldown")
+        {
+            self.nav_view.pop();
+        }
+        self.show_drilldown = None;
+        self.drilldown_group = None;
     }
 
     /// Push the set of completed-download ids to the library grid so it can show
@@ -508,6 +564,39 @@ pub fn enqueue_item(app: &mut App, item: &MediaItem, group_id: Option<String>) {
     app.refresh_downloads_view();
 }
 
+/// Download (or retry) a single episode, nesting it under its show's group so it
+/// clusters with season grabs in the Downloads view rather than appearing as a
+/// loose standalone card (R7). A failed episode resumes via the existing retry
+/// path (preserving any `.part`); an already-active or completed one is a no-op.
+pub fn enqueue_download_episode(app: &mut App, show: &MediaItem, episode: &MediaItem) {
+    use crate::components::detail::episode_download::{DownloadIntent, episode_download_intent};
+    use crate::models::download::GroupScope;
+
+    let existing = with_repo(app, |repo| repo.find(&episode.id))
+        .and_then(Result::ok)
+        .flatten();
+    match episode_download_intent(existing.as_ref()) {
+        DownloadIntent::Retry => item_action(app, &episode.id, DownloadItemAction::Retry),
+        DownloadIntent::NoOp => {}
+        DownloadIntent::Enqueue => {
+            // A leftover Removed/Pruned row would block `enqueue_item`'s
+            // idempotent upsert (it skips when a row already exists), leaving the
+            // re-download invisible. Clear the stale row first so the fresh
+            // enqueue records a Queued one.
+            if existing.is_some() {
+                with_repo(app, |repo| {
+                    if let Err(e) = repo.delete(&episode.id) {
+                        warn!("Failed to clear stale download row {}: {e}", episode.id);
+                    }
+                });
+            }
+            // Reuse the show-group enqueue path so the episode gets the
+            // `group:{show_id}` group_id and nests under the show (KTD1).
+            enqueue_group(app, show, std::slice::from_ref(episode), GroupScope::Show);
+        }
+    }
+}
+
 /// Enqueue a show/season download: snapshot the currently-downloadable episodes
 /// (R5), record the group, and enqueue the missing ones as group members. A
 /// re-trigger tops up only episodes not already present (R6) — `enqueue_item`'s
@@ -546,6 +635,90 @@ pub fn enqueue_group(
     app.toast(&format!("Downloading {}", parent.title));
 }
 
+/// Begin an undoable delete (drill-in / Show-detail episode deletes). The row is
+/// hidden immediately (marked `Removed` + any transfer cancelled) and captured
+/// so an Undo can restore it; the actual files + row are removed only once the
+/// undo window lapses (see [`finalize_delete`]). The user chose this over an
+/// immediate delete so a mis-tap doesn't destroy a downloaded file.
+pub fn request_delete_with_undo(
+    app: &mut App,
+    media_item_id: &str,
+    title: &str,
+    sender: &relm4::ComponentSender<App>,
+) {
+    let Some(row) = with_repo(app, |repo| repo.find(media_item_id))
+        .and_then(Result::ok)
+        .flatten()
+    else {
+        return;
+    };
+    // Stop any in-flight transfer and hide the row (derive_rows filters
+    // `Removed`). Files stay on disk until the delete is finalized.
+    let events = app.downloads.queue.cancel(media_item_id);
+    apply_events(app, events);
+    persist_state(&app.db, media_item_id, DownloadState::Removed, None);
+    app.pending_deletes.insert(media_item_id.to_string(), row);
+    app.refresh_downloads_view();
+    app.push_downloaded_ids();
+
+    let toast = adw::Toast::new(&format!("Deleted {title}"));
+    toast.set_button_label(Some("Undo"));
+    toast.set_timeout(5);
+    let s_undo = sender.input_sender().clone();
+    let id_undo = media_item_id.to_string();
+    toast.connect_button_clicked(move |_| {
+        let _ = s_undo.send(super::AppMsg::UndoDeleteDownload(id_undo.clone()));
+    });
+    let s_fin = sender.input_sender().clone();
+    let id_fin = media_item_id.to_string();
+    // Fires on timeout AND after the button click; `finalize_delete` no-ops if
+    // the row was already restored by the undo handler (which runs first).
+    toast.connect_dismissed(move |_| {
+        let _ = s_fin.send(super::AppMsg::FinalizeDeleteDownload(id_fin.clone()));
+    });
+    app.toast_overlay.add_toast(toast);
+}
+
+/// Undo a pending delete: restore the captured row (its files were never
+/// removed) and re-enqueue it if it was mid-transfer.
+pub fn undo_delete(app: &mut App, media_item_id: &str) {
+    let Some(row) = app.pending_deletes.remove(media_item_id) else {
+        return;
+    };
+    if let Err(e) = with_repo(app, |repo| repo.upsert(&row)).transpose() {
+        warn!("Failed to restore download row {media_item_id}: {e}");
+    }
+    if matches!(
+        row.state,
+        DownloadState::Queued | DownloadState::Downloading | DownloadState::Paused
+    ) {
+        let events = app
+            .downloads
+            .queue
+            .enqueue(&row.media_item_id, &row.part_key);
+        apply_events(app, events);
+    }
+    app.refresh_downloads_view();
+    app.push_downloaded_ids();
+}
+
+/// Finalize a pending delete once the undo window lapsed: remove the files + row.
+/// A no-op if the delete was already undone.
+pub fn finalize_delete(app: &mut App, media_item_id: &str) {
+    if app.pending_deletes.remove(media_item_id).is_none() {
+        return;
+    }
+    delete_download_files(app, media_item_id);
+    with_repo(app, |repo| {
+        if let Err(e) = repo.delete(media_item_id) {
+            warn!("Failed to delete download row {media_item_id}: {e}");
+        }
+    });
+    app.refresh_downloads_view();
+    app.push_downloaded_ids();
+    app.maybe_pop_empty_drilldown();
+}
+
 /// Apply a per-item action from the UI (pause/resume/cancel/delete/retry).
 pub fn item_action(app: &mut App, media_item_id: &str, action: DownloadItemAction) {
     let events = match action {
@@ -575,6 +748,8 @@ pub fn item_action(app: &mut App, media_item_id: &str, action: DownloadItemActio
     app.refresh_downloads_view();
     // Delete/cancel can drop a completed download — refresh library badges.
     app.push_downloaded_ids();
+    // A cancel/delete may have emptied an open drill-in's group.
+    app.maybe_pop_empty_drilldown();
 }
 
 /// Reorder a queued item (queued items only — see [`DownloadQueue::reorder`]).
