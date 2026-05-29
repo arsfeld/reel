@@ -87,6 +87,10 @@ pub enum HomeViewMsg {
     /// Render Home instantly from a session-cached payload (no fetch, no loading
     /// page). Emitted by App on a Home content-cache hit.
     ShowCached(Box<CachedHome>),
+    /// Background-revalidate Home: refetch while cached shelves stay visible (no
+    /// clear, no loading page). The result reports to App, which re-renders only
+    /// if the content changed. Server sources only (Local is deferred).
+    Revalidate,
     LoadError(String),
     /// A card was activated. `resume` is set for Continue Watching cards, which
     /// resume playback rather than opening a detail page.
@@ -113,6 +117,7 @@ impl std::fmt::Debug for HomeViewMsg {
                 write!(f, "LoadHome({} in progress)", in_progress.len())
             }
             Self::ShowCached(_) => write!(f, "ShowCached(..)"),
+            Self::Revalidate => write!(f, "Revalidate"),
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
             Self::CardActivated { item, resume } => {
                 write!(f, "CardActivated({}, resume={resume})", item.title)
@@ -181,6 +186,9 @@ pub enum HomeViewOutput {
     /// content cache keyed by the current source set. Only emitted when every
     /// source contributed without error, so a partial Home is never cached.
     HomeAssembled(Box<CachedHome>),
+    /// A background Home revalidation finished (success, incomplete, or error).
+    /// App clears its in-flight flag so the next revisit can revalidate again.
+    RevalidationDone,
 }
 
 #[derive(Debug)]
@@ -200,6 +208,11 @@ pub enum HomeViewCmd {
         /// only genuine empties). A partial load is rendered but not cached, so a
         /// transient source failure never freezes an incomplete Home on revisit.
         complete: bool,
+        /// True when this result came from a background revalidation (cached
+        /// shelves are still on screen). The handler then reports to App without
+        /// rendering, and App re-renders only if the content changed. False for a
+        /// normal first load, which renders immediately.
+        revalidation: bool,
     },
     PosterLoaded {
         generation: Generation,
@@ -389,23 +402,13 @@ impl Component for HomeView {
                 self.last_error = None;
                 self.clear_shelves();
 
-                // The merged Continue Watching row spans every connected source
-                // that advertises server-side Continue Watching (Plex On Deck,
-                // Jellyfin Resume). Sources that fold CW into the local progress
-                // DB (Local) don't advertise it.
-                let cw_sources: Vec<(String, Arc<dyn MediaSource>)> = self
+                // With no server-CW source at all (e.g. only Local), build the
+                // single Continue Watching row from the local DB progress the app
+                // pushes in. Server sources get CW from the async fetch instead.
+                let server_continue_watching = self
                     .sources
                     .iter()
-                    .filter(|(source_type, _, _)| source_type.provides_server_hubs())
-                    .map(|(_, _, s)| (s.name().to_string(), s.clone()))
-                    .collect();
-                // True when at least one source offers a server CW row, so the
-                // local-DB fallback below is suppressed.
-                let server_continue_watching = !cw_sources.is_empty();
-
-                // With no server CW source at all (e.g. only Local), build the
-                // single Continue Watching row from the local DB progress the
-                // app pushes in.
+                    .any(|(source_type, _, _)| source_type.provides_server_hubs());
                 if !server_continue_watching && !in_progress.is_empty() {
                     let cw_id = self.add_shelf("Continue Watching");
                     let cards: Vec<(MediaItem, Option<f64>)> = in_progress
@@ -415,89 +418,26 @@ impl Component for HomeView {
                     self.populate_shelf(cw_id, cards, true, &sender);
                 }
 
-                // Fetch On Deck (Plex) + Recently Added from the source (async).
-                if let Some(ref source) = self.source {
+                if self.source.is_some() {
                     self.refresh_visible_page();
-                    let src = source.clone();
-                    sender.oneshot_command(async move {
-                        // Fan out over every server-CW source, badge each list
-                        // with its source label, then merge into one row. Errors
-                        // or empty lists simply contribute nothing.
-                        // `complete` tracks whether every fetch returned without a
-                        // real error. NotSupported (a source/endpoint that simply
-                        // doesn't offer a row) counts as a genuine empty, not a
-                        // failure, so it does not block caching.
-                        let mut complete = true;
-
-                        let cw_futures = cw_sources
-                            .into_iter()
-                            .map(|(label, s)| async move { (label, s.continue_watching().await) });
-                        let cw_results: Vec<(String, Result<Vec<MediaItem>, SourceError>)> =
-                            futures::future::join_all(cw_futures).await;
-                        let per_source: Vec<(String, Vec<MediaItem>)> = cw_results
-                            .into_iter()
-                            .map(|(label, r)| {
-                                complete &= !is_real_source_error(&r);
-                                (label, r.unwrap_or_default())
-                            })
-                            .collect();
-                        let continue_watching = merge_continue_watching(per_source);
-
-                        let libs = match src.libraries().await {
-                            Ok(l) => l,
-                            Err(e) => return HomeViewCmd::Error(e.to_string()),
-                        };
-
-                        // Per-library Recently Added, fetched concurrently.
-                        let ra_futures = libs.iter().map(|lib| {
-                            let src = src.clone();
-                            let key = lib.key.clone();
-                            let title = lib.title.clone();
-                            async move { (title, src.recently_added_in_library(&key).await) }
-                        });
-                        let mut recently_added: Vec<(String, Vec<MediaItem>)> = Vec::new();
-                        for (title, r) in futures::future::join_all(ra_futures).await {
-                            complete &= !is_real_source_error(&r);
-                            let mut items = r.unwrap_or_default();
-                            items.truncate(20);
-                            if !items.is_empty() {
-                                recently_added.push((title, items));
-                            }
-                        }
-
-                        // Collections across all libraries.
-                        let col_futures = libs.iter().map(|lib| {
-                            let src = src.clone();
-                            let key = lib.key.clone();
-                            async move { src.collections(&key).await }
-                        });
-                        let mut collections: Vec<MediaItem> = Vec::new();
-                        for r in futures::future::join_all(col_futures).await {
-                            complete &= !is_real_source_error(&r);
-                            collections.extend(r.unwrap_or_default());
-                        }
-
-                        // Server-curated hubs. NotSupported (non-Plex) yields an
-                        // empty list, so those sources simply show no hub rows.
-                        let hubs = match src.hubs().await {
-                            Ok(h) => h,
-                            Err(e) => {
-                                complete &= matches!(e, SourceError::NotSupported(_));
-                                Vec::new()
-                            }
-                        };
-
-                        HomeViewCmd::HomeData {
-                            continue_watching,
-                            recently_added,
-                            collections,
-                            hubs,
-                            complete,
-                        }
-                    });
+                    self.spawn_home_fetch(false, &sender);
                 } else {
                     self.loading = false;
                     self.refresh_visible_page();
+                }
+            }
+            HomeViewMsg::Revalidate => {
+                // Background refresh while cached shelves stay visible. Server
+                // sources only — Local revalidation is deferred (its content
+                // changes via filesystem events, out of scope). No clear, no
+                // loading page; the result reports to App which re-renders on
+                // change.
+                let has_server = self
+                    .sources
+                    .iter()
+                    .any(|(source_type, _, _)| source_type.provides_server_hubs());
+                if has_server && self.source.is_some() {
+                    self.spawn_home_fetch(true, &sender);
                 }
             }
             HomeViewMsg::ShowCached(home) => {
@@ -592,6 +532,7 @@ impl Component for HomeView {
                 collections,
                 hubs,
                 complete,
+                revalidation,
             } => {
                 self.loading = false;
                 // Hand a complete load to App for session caching (App fills the
@@ -607,13 +548,23 @@ impl Component for HomeView {
                         epoch: 0,
                     })));
                 }
-                self.render_home(
-                    continue_watching,
-                    recently_added,
-                    collections,
-                    hubs,
-                    &sender,
-                );
+                // First load renders immediately (shelves were cleared, a loading
+                // page is showing). A revalidation keeps the cached shelves up —
+                // App diffs the reported payload and re-renders via ShowCached only
+                // if the content changed, so a revisit doesn't churn the view. The
+                // RevalidationDone signal always fires so App clears its in-flight
+                // flag even when the result was incomplete (and thus not cached).
+                if revalidation {
+                    let _ = sender.output(HomeViewOutput::RevalidationDone);
+                } else {
+                    self.render_home(
+                        continue_watching,
+                        recently_added,
+                        collections,
+                        hubs,
+                        &sender,
+                    );
+                }
             }
             HomeViewCmd::Error(msg) => {
                 sender.input(HomeViewMsg::LoadError(msg));
@@ -643,6 +594,110 @@ impl Component for HomeView {
 }
 
 impl HomeView {
+    /// Fan out over every server source to assemble Home data (Continue
+    /// Watching, Recently Added, Collections, hubs), then deliver it as a
+    /// `HomeData` command. Shared by the first load (`revalidation = false`,
+    /// shelves already cleared and a loading page showing) and background
+    /// revalidation (`revalidation = true`, cached shelves still on screen).
+    fn spawn_home_fetch(&self, revalidation: bool, sender: &ComponentSender<Self>) {
+        let cw_sources: Vec<(String, Arc<dyn MediaSource>)> = self
+            .sources
+            .iter()
+            .filter(|(source_type, _, _)| source_type.provides_server_hubs())
+            .map(|(_, _, s)| (s.name().to_string(), s.clone()))
+            .collect();
+        let Some(src) = self.source.clone() else {
+            return;
+        };
+        sender.oneshot_command(async move {
+            // `complete` tracks whether every fetch returned without a real error.
+            // NotSupported (an endpoint that simply doesn't offer a row) counts as
+            // a genuine empty, not a failure, so it does not block caching.
+            let mut complete = true;
+
+            let cw_futures = cw_sources
+                .into_iter()
+                .map(|(label, s)| async move { (label, s.continue_watching().await) });
+            let cw_results: Vec<(String, Result<Vec<MediaItem>, SourceError>)> =
+                futures::future::join_all(cw_futures).await;
+            let per_source: Vec<(String, Vec<MediaItem>)> = cw_results
+                .into_iter()
+                .map(|(label, r)| {
+                    complete &= !is_real_source_error(&r);
+                    (label, r.unwrap_or_default())
+                })
+                .collect();
+            let continue_watching = merge_continue_watching(per_source);
+
+            let libs = match src.libraries().await {
+                Ok(l) => l,
+                Err(e) => {
+                    // A background revalidation failure must not replace the cached
+                    // shelves with an error page — report an incomplete result so
+                    // App leaves the cache untouched and clears the in-flight flag.
+                    if revalidation {
+                        return HomeViewCmd::HomeData {
+                            continue_watching,
+                            recently_added: Vec::new(),
+                            collections: Vec::new(),
+                            hubs: Vec::new(),
+                            complete: false,
+                            revalidation: true,
+                        };
+                    }
+                    return HomeViewCmd::Error(e.to_string());
+                }
+            };
+
+            // Per-library Recently Added, fetched concurrently.
+            let ra_futures = libs.iter().map(|lib| {
+                let src = src.clone();
+                let key = lib.key.clone();
+                let title = lib.title.clone();
+                async move { (title, src.recently_added_in_library(&key).await) }
+            });
+            let mut recently_added: Vec<(String, Vec<MediaItem>)> = Vec::new();
+            for (title, r) in futures::future::join_all(ra_futures).await {
+                complete &= !is_real_source_error(&r);
+                let mut items = r.unwrap_or_default();
+                items.truncate(20);
+                if !items.is_empty() {
+                    recently_added.push((title, items));
+                }
+            }
+
+            // Collections across all libraries.
+            let col_futures = libs.iter().map(|lib| {
+                let src = src.clone();
+                let key = lib.key.clone();
+                async move { src.collections(&key).await }
+            });
+            let mut collections: Vec<MediaItem> = Vec::new();
+            for r in futures::future::join_all(col_futures).await {
+                complete &= !is_real_source_error(&r);
+                collections.extend(r.unwrap_or_default());
+            }
+
+            // Server-curated hubs. NotSupported (non-Plex) yields an empty list.
+            let hubs = match src.hubs().await {
+                Ok(h) => h,
+                Err(e) => {
+                    complete &= matches!(e, SourceError::NotSupported(_));
+                    Vec::new()
+                }
+            };
+
+            HomeViewCmd::HomeData {
+                continue_watching,
+                recently_added,
+                collections,
+                hubs,
+                complete,
+                revalidation,
+            }
+        });
+    }
+
     /// Build the Home shelves from assembled data. Shared by a completed network
     /// load (`HomeData`) and an instant cache render (`ShowCached`). Applies the
     /// current hidden-library filter at render time, so a visibility change is
