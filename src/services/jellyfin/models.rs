@@ -128,7 +128,11 @@ pub struct UserItemData {
     pub is_favorite: bool,
 }
 
-/// A playable media source (used to obtain the `mediaSourceId` for streaming).
+/// A playable media source. Browsing responses (`BaseItemDto.MediaSources`) carry
+/// only the identity fields; a `PlaybackInfo` response enriches the same struct
+/// with the playability verdict, stream list, and transcoding URL. All the
+/// enrichment fields are `#[serde(default)]` so the lean browsing shape still
+/// deserializes.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MediaSourceInfo {
@@ -140,6 +144,72 @@ pub struct MediaSourceInfo {
     pub container: Option<String>,
     #[serde(default, rename = "Name")]
     pub name: Option<String>,
+    /// Original file bitrate in bits/sec (PlaybackInfo only).
+    #[serde(default, rename = "Bitrate")]
+    pub bitrate: Option<i64>,
+    /// Server says the client profile can play this source as-is.
+    #[serde(default, rename = "SupportsDirectPlay")]
+    pub supports_direct_play: bool,
+    /// Server can remux the container without re-encoding.
+    #[serde(default, rename = "SupportsDirectStream")]
+    pub supports_direct_stream: bool,
+    /// Server will transcode if needed.
+    #[serde(default, rename = "SupportsTranscoding")]
+    pub supports_transcoding: bool,
+    /// Relative URL (no scheme/host) for the transcode/remux stream; `None` for direct play.
+    #[serde(default, rename = "TranscodingUrl")]
+    pub transcoding_url: Option<String>,
+    /// "hls" or "http" — the transport of `transcoding_url`.
+    #[serde(default, rename = "TranscodingSubProtocol")]
+    pub transcoding_sub_protocol: Option<String>,
+    #[serde(default, rename = "DefaultAudioStreamIndex")]
+    pub default_audio_stream_index: Option<i32>,
+    #[serde(default, rename = "DefaultSubtitleStreamIndex")]
+    pub default_subtitle_stream_index: Option<i32>,
+    /// Per-stream metadata (video/audio/subtitle). Empty in lean browsing responses.
+    #[serde(default, rename = "MediaStreams")]
+    pub media_streams: Vec<MediaStream>,
+}
+
+/// A single audio/video/subtitle stream within a media source. Returned by
+/// `PlaybackInfo`; used to build transcode-aware track menus.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct MediaStream {
+    /// Stream index — used as `AudioStreamIndex`/`SubtitleStreamIndex` when re-resolving.
+    #[serde(default, rename = "Index")]
+    pub index: i32,
+    /// "Audio", "Video", "Subtitle", "EmbeddedImage", "Data".
+    #[serde(default, rename = "Type")]
+    pub type_: Option<String>,
+    #[serde(default, rename = "Codec")]
+    pub codec: Option<String>,
+    #[serde(default, rename = "Language")]
+    pub language: Option<String>,
+    /// Human-readable label, e.g. "English (AAC 5.1)".
+    #[serde(default, rename = "DisplayTitle")]
+    pub display_title: Option<String>,
+    #[serde(default, rename = "IsDefault")]
+    pub is_default: bool,
+    #[serde(default, rename = "IsForced")]
+    pub is_forced: bool,
+    #[serde(default, rename = "Channels")]
+    pub channels: Option<i32>,
+    #[serde(default, rename = "Width")]
+    pub width: Option<i32>,
+    #[serde(default, rename = "Height")]
+    pub height: Option<i32>,
+}
+
+/// Response envelope for `POST /Items/{id}/PlaybackInfo`: the server's playability
+/// verdict per source plus the session id that ties keepalive/progress/stop together.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PlaybackInfoResponse {
+    #[serde(default, rename = "MediaSources")]
+    pub media_sources: Vec<MediaSourceInfo>,
+    #[serde(default, rename = "PlaySessionId")]
+    pub play_session_id: Option<String>,
 }
 
 /// Result of an authentication request.
@@ -318,6 +388,83 @@ mod tests {
         assert_eq!(seg.type_.as_deref(), Some("Intro"));
         assert_eq!(seg.start_ticks, Some(0));
         assert_eq!(seg.end_ticks, Some(300000000));
+    }
+
+    #[test]
+    fn deserialize_playback_info_transcode_response() {
+        let json = r#"{
+            "PlaySessionId": "psess-9",
+            "MediaSources": [{
+                "Id": "src1",
+                "Container": "mkv",
+                "Bitrate": 18000000,
+                "SupportsDirectPlay": false,
+                "SupportsDirectStream": false,
+                "SupportsTranscoding": true,
+                "TranscodingUrl": "/videos/abc/master.m3u8?api_key=secret&mediaSourceId=src1",
+                "TranscodingSubProtocol": "hls",
+                "DefaultAudioStreamIndex": 1,
+                "MediaStreams": [
+                    {"Index": 0, "Type": "Video", "Codec": "hevc", "Width": 3840, "Height": 2160},
+                    {"Index": 1, "Type": "Audio", "Codec": "truehd", "Language": "eng", "DisplayTitle": "English (TrueHD 7.1)", "IsDefault": true, "Channels": 8},
+                    {"Index": 2, "Type": "Subtitle", "Codec": "ass", "Language": "eng", "DisplayTitle": "English"}
+                ]
+            }]
+        }"#;
+        let resp: PlaybackInfoResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.play_session_id.as_deref(), Some("psess-9"));
+        let src = &resp.media_sources[0];
+        assert!(!src.supports_direct_play);
+        assert!(src.supports_transcoding);
+        assert_eq!(src.transcoding_sub_protocol.as_deref(), Some("hls"));
+        assert_eq!(src.media_streams.len(), 3);
+        let audio = src.media_streams.iter().find(|s| s.index == 1).unwrap();
+        assert_eq!(audio.type_.as_deref(), Some("Audio"));
+        assert_eq!(audio.display_title.as_deref(), Some("English (TrueHD 7.1)"));
+        assert!(audio.is_default);
+    }
+
+    #[test]
+    fn deserialize_playback_info_direct_play_response() {
+        let json = r#"{
+            "PlaySessionId": "psess-1",
+            "MediaSources": [{
+                "Id": "src1",
+                "SupportsDirectPlay": true,
+                "SupportsDirectStream": true,
+                "SupportsTranscoding": true,
+                "MediaStreams": [{"Index": 1, "Type": "Audio", "Codec": "aac"}]
+            }]
+        }"#;
+        let resp: PlaybackInfoResponse = serde_json::from_str(json).unwrap();
+        let src = &resp.media_sources[0];
+        assert!(src.supports_direct_play);
+        assert!(src.transcoding_url.is_none());
+    }
+
+    #[test]
+    fn base_item_media_source_defaults_enrichment_fields() {
+        // A lean browsing response (BaseItemDto.MediaSources) carries no
+        // PlaybackInfo enrichment fields; they must default without error.
+        let json = r#"{
+            "Id": "x",
+            "Type": "Movie",
+            "MediaSources": [{"Id": "src1", "Path": "/m/x.mkv", "Container": "mkv"}]
+        }"#;
+        let item: BaseItemDto = serde_json::from_str(json).unwrap();
+        let src = &item.media_sources[0];
+        assert_eq!(src.id.as_deref(), Some("src1"));
+        assert!(!src.supports_direct_play);
+        assert!(src.media_streams.is_empty());
+        assert!(src.transcoding_url.is_none());
+        assert!(src.bitrate.is_none());
+    }
+
+    #[test]
+    fn playback_info_response_missing_fields_use_defaults() {
+        let resp: PlaybackInfoResponse = serde_json::from_str("{}").unwrap();
+        assert!(resp.media_sources.is_empty());
+        assert!(resp.play_session_id.is_none());
     }
 
     #[test]
