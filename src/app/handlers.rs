@@ -257,6 +257,11 @@ fn resolve_playback_at(
         part_index: 0,
         quality,
         force_transcode,
+        can_direct_play_10bit: crate::player::capabilities::can_direct_play(
+            app.can_render_10bit,
+            quality,
+            force_transcode,
+        ),
         // Carry the chosen tracks (AE6) so a quality switch preserves them.
         audio_stream_id: app.current_audio_stream_id,
         subtitle_stream_id: app.current_subtitle_stream_id,
@@ -481,6 +486,11 @@ fn begin_initial_playback(
         part_index: 0,
         quality: crate::models::playback::QualitySelection::Auto,
         force_transcode: false,
+        can_direct_play_10bit: crate::player::capabilities::can_direct_play(
+            app.can_render_10bit,
+            crate::models::playback::QualitySelection::Auto,
+            false,
+        ),
         audio_stream_id: None,
         subtitle_stream_id: None,
         offset_secs: resume_secs.unwrap_or(0.0),

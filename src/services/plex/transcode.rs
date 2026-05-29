@@ -423,6 +423,7 @@ mod tests {
             part_index: 0,
             quality: QualitySelection::Auto,
             force_transcode: false,
+            can_direct_play_10bit: false,
             audio_stream_id: None,
             subtitle_stream_id: None,
             offset_secs: 0.0,
