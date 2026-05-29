@@ -182,6 +182,12 @@ pub fn build_effective_watch_map(
 /// elsewhere) still converges. This is NOT used on first load — that path keeps
 /// the unconditional [`build_effective_watch_map`] overlay.
 ///
+/// Library-only by design: Home revalidation does not run this merge. Home relies
+/// on the R8 in-place patch (`SessionContentCache::patch_watch_state`) plus a
+/// whole-payload equality check to suppress no-op re-renders, so a scrobble racing
+/// a Home refetch can be briefly overwritten by the server read until the next
+/// revalidation — an accepted asymmetry.
+///
 /// `last_mutation` maps media id → the monotonic mutation sequence at its last
 /// local change; `dispatch_seq` is the sequence captured when the refetch was
 /// dispatched. An item is "racing" when `last_mutation[id] > dispatch_seq`.

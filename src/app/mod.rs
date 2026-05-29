@@ -458,7 +458,7 @@ impl App {
         self.home_view
             .emit(HomeViewMsg::SetSources(self.home_sources()));
         // Drop the removed source's cached library entries + the cached Home.
-        let prefix = format!("{}:{}:", st.as_str(), source_id.trim_end_matches('/'));
+        let prefix = SessionContentCache::library_key_prefix(st, source_id.trim_end_matches('/'));
         self.content_cache.apply_invalidation(
             invalidation_for(SourceSetEvent::SourceRemoved),
             Some(&prefix),
@@ -1145,21 +1145,26 @@ impl Component for App {
                 // A revalidation whose source set changed mid-flight is stale: drop
                 // it (the changed set already invalidated Home and will reload).
                 if was_revalidating
-                    && self.content_cache.source_set_epoch() != self.home_revalidate_epoch
+                    && self
+                        .content_cache
+                        .source_set_changed_since(self.home_revalidate_epoch)
                 {
                     return;
                 }
                 // Re-render only when revalidation actually changed the content, so
-                // a revisit doesn't reset Home's scroll for nothing.
+                // a revisit doesn't reset Home's scroll for nothing. Clone the
+                // payload only when we actually re-render; otherwise store by move.
                 let changed = self
                     .content_cache
                     .get_home(&home.source_set_key)
                     .is_none_or(|cached| {
                         !crate::services::session_cache::home_content_eq(cached, &home)
                     });
-                self.content_cache.set_home(home.clone());
                 if was_revalidating && changed && self.current_view == CurrentView::Home {
+                    self.content_cache.set_home(home.clone());
                     self.home_view.emit(HomeViewMsg::ShowCached(Box::new(home)));
+                } else {
+                    self.content_cache.set_home(home);
                 }
             }
             AppMsg::HomeRevalidationDone => {
@@ -1820,7 +1825,9 @@ impl Component for App {
                 // Drop if the entry was evicted/superseded or the source set
                 // changed since dispatch (KTD-5 staleness guards).
                 if self.content_cache.library_epoch(&cache_key) != Some(entry_epoch)
-                    || self.content_cache.source_set_epoch() != source_set_epoch
+                    || self
+                        .content_cache
+                        .source_set_changed_since(source_set_epoch)
                 {
                     return;
                 }
@@ -1843,13 +1850,16 @@ impl Component for App {
                     // Nothing changed: leave the view (and its scroll) untouched.
                     return;
                 }
-                self.content_cache.put_library(&cache_key, merged.clone());
-                // Apply in place only if this library is the one on screen.
+                // Store the merged result; apply in place only if this library is
+                // on screen. Clone only when both consumers (cache + view) need it.
                 if self.current_view == CurrentView::Library(section_key.clone()) {
+                    self.content_cache.put_library(&cache_key, merged.clone());
                     self.library_view.emit(LibraryViewMsg::ApplyRevalidated {
                         section_key,
                         items: merged,
                     });
+                } else {
+                    self.content_cache.put_library(&cache_key, merged);
                 }
             }
             AppCmd::Noop => {}

@@ -215,6 +215,13 @@ impl SessionContentCache {
         format!("{}:{}:{}", source_type.as_str(), source_id, section_key)
     }
 
+    /// The `{source_type}:{source_id}:` prefix shared by all of a source's
+    /// library keys. Used to evict a removed source's entries; defined here so the
+    /// prefix can't drift from `library_key`'s format.
+    pub fn library_key_prefix(source_type: SourceType, source_id: &str) -> String {
+        format!("{}:{}:", source_type.as_str(), source_id)
+    }
+
     /// Stable key for a set of sources: sort the `{source_type}:{source_id}`
     /// registry keys lexically and join them. Order-independent, collision-free
     /// (no hashing), and changes whenever a source id is added or removed.
@@ -324,10 +331,6 @@ impl SessionContentCache {
         self.library.len()
     }
 
-    pub fn capacity(&self) -> usize {
-        self.capacity
-    }
-
     // --- Home slot (exempt from LRU) ---
 
     /// Store the assembled Home payload for `source_set_key`. Bumps the epoch.
@@ -344,16 +347,6 @@ impl SessionContentCache {
             .filter(|h| h.source_set_key == source_set_key)
     }
 
-    /// The cached Home payload regardless of source set (for in-place patching of
-    /// the existing entry, e.g. an R8 Continue-Watching patch).
-    pub fn home_mut(&mut self) -> Option<&mut CachedHome> {
-        self.home.as_mut()
-    }
-
-    pub fn home_epoch(&self) -> Option<u64> {
-        self.home.as_ref().map(|h| h.epoch)
-    }
-
     pub fn invalidate_home(&mut self) {
         self.home = None;
     }
@@ -368,6 +361,12 @@ impl SessionContentCache {
     /// in-flight refetch stamped with the old value is dropped on return.
     pub fn bump_source_set_epoch(&mut self) {
         self.source_set_epoch += 1;
+    }
+
+    /// Whether the source set changed since `dispatch_epoch` was captured. Used
+    /// by background revalidation to drop a result built against an old set.
+    pub fn source_set_changed_since(&self, dispatch_epoch: u64) -> bool {
+        self.source_set_epoch != dispatch_epoch
     }
 
     /// Apply a computed invalidation. `source_prefix` is required when
