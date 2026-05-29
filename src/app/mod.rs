@@ -164,6 +164,9 @@ pub struct App {
     content_mutation_seq: u64,
     /// Per-item sequence at its last local watch mutation.
     content_last_mutation: std::collections::HashMap<String, u64>,
+    /// Library cache keys with a background revalidation refetch in flight, so a
+    /// second revisit doesn't dispatch a duplicate (coalescing).
+    revalidating: std::collections::HashSet<String>,
 }
 
 impl App {
@@ -282,6 +285,40 @@ impl App {
             .insert(id.to_string(), self.content_mutation_seq);
         self.content_cache
             .patch_watch_state(id, watched, position_ms);
+    }
+
+    /// Dispatch a background revalidation refetch for a cached library after an
+    /// instant render (U5). Coalesces duplicates per key, and stamps the request
+    /// with the entry epoch, source-set epoch, and mutation sequence so a result
+    /// superseded by eviction, a source-set change, or a racing local mutation is
+    /// dropped or merged correctly on return.
+    fn revalidate_library(
+        &mut self,
+        cache_key: String,
+        section_key: String,
+        source: Arc<dyn MediaSource>,
+        sender: &ComponentSender<Self>,
+    ) {
+        if !self.revalidating.insert(cache_key.clone()) {
+            return; // a refetch for this key is already in flight
+        }
+        let entry_epoch = self.content_cache.library_epoch(&cache_key).unwrap_or(0);
+        let source_set_epoch = self.content_cache.source_set_epoch();
+        let dispatch_seq = self.content_mutation_seq;
+        sender.oneshot_command(async move {
+            let result = source
+                .library_items(&section_key)
+                .await
+                .map_err(|e| e.to_string());
+            AppCmd::LibraryRevalidated {
+                cache_key,
+                section_key,
+                entry_epoch,
+                source_set_epoch,
+                dispatch_seq,
+                result,
+            }
+        });
     }
 
     /// Register a freshly-built source and add it to the sidebar as its own
@@ -624,6 +661,16 @@ pub enum AppCmd {
     },
     /// No-op for fire-and-forget async commands (scrobble, timeline).
     Noop,
+    /// A background library revalidation refetch returned. Guarded on apply by
+    /// the stamped epochs; merged with any racing local mutation (U5/U6/U7).
+    LibraryRevalidated {
+        cache_key: String,
+        section_key: String,
+        entry_epoch: u64,
+        source_set_epoch: u64,
+        dispatch_seq: u64,
+        result: Result<Vec<MediaItem>, String>,
+    },
     /// Skip markers fetched from the media source after playback starts.
     SkipMarkersLoaded(SkipMarkers),
     /// A playback decision resolved (U7): hand the URL to the player using the
@@ -940,6 +987,7 @@ impl Component for App {
             content_cache: SessionContentCache::new(),
             content_mutation_seq: 0,
             content_last_mutation: std::collections::HashMap::new(),
+            revalidating: std::collections::HashSet::new(),
         };
 
         // Reconcile downloads against disk and rebuild the queue (no transfers
@@ -1042,9 +1090,19 @@ impl Component for App {
                     self.content_cache.get_library(&key).map(<[_]>::to_vec)
                 });
                 match cached {
-                    Some(items) => self
-                        .library_view
-                        .emit(LibraryViewMsg::ShowCached(section, items)),
+                    Some(items) => {
+                        // Instant render, then revalidate in the background (U5).
+                        let st = parsed.expect("cache hit implies a parsed source type");
+                        let cache_key =
+                            SessionContentCache::library_key(st, &source_id, &section.key);
+                        let section_key = section.key.clone();
+                        let src = self.sources.get(st, &source_id);
+                        self.library_view
+                            .emit(LibraryViewMsg::ShowCached(section, items));
+                        if let Some(src) = src {
+                            self.revalidate_library(cache_key, section_key, src, &sender);
+                        }
+                    }
                     None => self.library_view.emit(LibraryViewMsg::LoadLibrary(section)),
                 }
             }
@@ -1699,6 +1757,54 @@ impl Component for App {
             AppCmd::FlushedPending(ids) => watch_events::delete_flushed_pending(&self.db, &ids),
             AppCmd::KeepalivePinged(ok) => {
                 transcode_keepalive::record_result(self, ok, &sender);
+            }
+            AppCmd::LibraryRevalidated {
+                cache_key,
+                section_key,
+                entry_epoch,
+                source_set_epoch,
+                dispatch_seq,
+                result,
+            } => {
+                self.revalidating.remove(&cache_key);
+                // Failed refetch: leave the cached content untouched (R6).
+                let Ok(items) = result else {
+                    return;
+                };
+                // Drop if the entry was evicted/superseded or the source set
+                // changed since dispatch (KTD-5 staleness guards).
+                if self.content_cache.library_epoch(&cache_key) != Some(entry_epoch)
+                    || self.content_cache.source_set_epoch() != source_set_epoch
+                {
+                    return;
+                }
+                let Some(cached) = self
+                    .content_cache
+                    .peek_library(&cache_key)
+                    .map(<[_]>::to_vec)
+                else {
+                    return;
+                };
+                // Merge: server-authoritative except for a racing local mutation.
+                let merged = crate::services::library_filter::merge_revalidated(
+                    items,
+                    &cached,
+                    &self.content_last_mutation,
+                    dispatch_seq,
+                );
+                let diff = crate::services::session_cache::diff_items(&cached, &merged);
+                if diff.is_empty() {
+                    // Nothing changed: leave the view (and its scroll) untouched.
+                    return;
+                }
+                self.content_cache.put_library(&cache_key, merged.clone());
+                // Apply in place only if this library is the one on screen.
+                if self.current_view == CurrentView::Library(section_key.clone()) {
+                    self.library_view.emit(LibraryViewMsg::ApplyRevalidated {
+                        section_key,
+                        items: merged,
+                    });
+                }
             }
             AppCmd::Noop => {}
         }

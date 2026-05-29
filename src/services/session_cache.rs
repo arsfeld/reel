@@ -28,6 +28,62 @@ use std::collections::HashMap;
 /// and entry-count bounding keeps the implementation simple. Not user-facing.
 pub const DEFAULT_LIBRARY_CAPACITY: usize = 12;
 
+/// The difference between a cached item list and a refetched one, used by
+/// background revalidation to decide whether (and how) to update the view. Pure
+/// data — the caller turns it into widget updates.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ItemDiff {
+    /// Ids present only in the new list.
+    pub added: Vec<String>,
+    /// Ids present only in the old list.
+    pub removed: Vec<String>,
+    /// Ids in both whose item changed (watch state or any other field).
+    pub changed: Vec<String>,
+    /// The shared items appear in a different relative order.
+    pub reordered: bool,
+}
+
+impl ItemDiff {
+    /// True when old and new are equivalent — nothing to apply, so the view (and
+    /// its scroll position) is left untouched. The common revisit case.
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty()
+            && self.removed.is_empty()
+            && self.changed.is_empty()
+            && !self.reordered
+    }
+}
+
+/// Diff two item lists by id. `changed` uses full `MediaItem` equality, so a
+/// watch-state-only change registers. `reordered` is set when the two lists share
+/// the same id set but in a different relative order.
+pub fn diff_items(old: &[MediaItem], new: &[MediaItem]) -> ItemDiff {
+    use std::collections::HashMap;
+    let old_by_id: HashMap<&str, &MediaItem> = old.iter().map(|i| (i.id.as_str(), i)).collect();
+    let new_by_id: HashMap<&str, &MediaItem> = new.iter().map(|i| (i.id.as_str(), i)).collect();
+
+    let mut diff = ItemDiff::default();
+    for item in new {
+        match old_by_id.get(item.id.as_str()) {
+            None => diff.added.push(item.id.clone()),
+            Some(old_item) if *old_item != item => diff.changed.push(item.id.clone()),
+            Some(_) => {}
+        }
+    }
+    for item in old {
+        if !new_by_id.contains_key(item.id.as_str()) {
+            diff.removed.push(item.id.clone());
+        }
+    }
+    // Reorder: compare the relative order of the shared id set.
+    if diff.added.is_empty() && diff.removed.is_empty() {
+        let old_order: Vec<&str> = old.iter().map(|i| i.id.as_str()).collect();
+        let new_order: Vec<&str> = new.iter().map(|i| i.id.as_str()).collect();
+        diff.reordered = old_order != new_order;
+    }
+    diff
+}
+
 /// A change to the connected-source set (or library visibility) that the cache
 /// must react to. Drives `invalidation_for`, which keeps the "what to drop"
 /// policy pure and testable.
@@ -630,6 +686,43 @@ mod tests {
         let home = c.get_home("plex:srv").unwrap();
         assert!(home.continue_watching[0].0.watched);
         assert!(home.recently_added[0].1[0].watched);
+    }
+
+    #[test]
+    fn diff_identical_lists_is_empty() {
+        let a = items(&["x", "y", "z"]);
+        let b = items(&["x", "y", "z"]);
+        assert!(diff_items(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn diff_detects_add_remove() {
+        let old = items(&["x", "y"]);
+        let new = items(&["y", "z"]);
+        let d = diff_items(&old, &new);
+        assert_eq!(d.added, vec!["z"]);
+        assert_eq!(d.removed, vec!["x"]);
+    }
+
+    #[test]
+    fn diff_detects_watch_only_change() {
+        let old = items(&["x"]);
+        let mut new = items(&["x"]);
+        new[0].watched = true; // same id, changed field
+        let d = diff_items(&old, &new);
+        assert_eq!(d.changed, vec!["x"]);
+        assert!(d.added.is_empty() && d.removed.is_empty());
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn diff_detects_reorder_only() {
+        let old = items(&["x", "y", "z"]);
+        let new = items(&["z", "y", "x"]);
+        let d = diff_items(&old, &new);
+        assert!(d.reordered);
+        assert!(d.added.is_empty() && d.removed.is_empty() && d.changed.is_empty());
+        assert!(!d.is_empty());
     }
 
     #[test]

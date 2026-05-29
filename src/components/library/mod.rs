@@ -123,6 +123,13 @@ pub enum LibraryViewMsg {
     /// Render a library instantly from session-cached items (no skeleton, no
     /// fetch). Emitted by App on a content-cache hit.
     ShowCached(LibrarySection, Vec<MediaItem>),
+    /// Apply a background-revalidation result to the displayed library in place
+    /// (no skeleton, no loading page; current filter/sort/search preserved).
+    /// App sends this only when the content actually changed.
+    ApplyRevalidated {
+        section_key: String,
+        items: Vec<MediaItem>,
+    },
     LoadError(String),
     // Search/filter/sort messages
     SearchChanged(String),
@@ -162,6 +169,9 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::LibraryLoaded(items) => write!(f, "LibraryLoaded({} items)", items.len()),
             Self::ShowCached(section, items) => {
                 write!(f, "ShowCached({}, {} items)", section.title, items.len())
+            }
+            Self::ApplyRevalidated { section_key, items } => {
+                write!(f, "ApplyRevalidated({section_key}, {} items)", items.len())
             }
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
             Self::SearchChanged(q) => write!(f, "SearchChanged({q:?})"),
@@ -801,6 +811,21 @@ impl Component for LibraryView {
                 self.library_key = Some(section.key.clone());
                 self.library_title.set_label(&section.title);
                 self.apply_loaded_items(items, &sender);
+            }
+            LibraryViewMsg::ApplyRevalidated { section_key, items } => {
+                // Silent in-place update from background revalidation. Guard that
+                // we're still showing this library (the user may have navigated
+                // away before the refetch returned). Preserve the current
+                // filter/sort/search — only the items and grid refresh.
+                if self.library_key.as_deref() != Some(section_key.as_str()) {
+                    return;
+                }
+                self.all_items = items;
+                self.recompute_watch_data();
+                self.filter_popover
+                    .reset(&self.all_items, &self.filter_state);
+                self.active_filters_bar.update(&self.filter_state);
+                self.rebuild_grid(&sender);
             }
             LibraryViewMsg::LoadError(msg) => {
                 self.loading_in_progress = false;
