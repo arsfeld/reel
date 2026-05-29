@@ -74,12 +74,21 @@ pub fn show_preferences(
         .selected(hwdec_mode_to_index(&settings.playback.hwdec_mode))
         .build();
 
+    let hdr_model = gtk::StringList::new(&["Transcode (recommended)", "Direct Play (limited color)"]);
+    let hdr_combo = adw::ComboRow::builder()
+        .title("HDR Playback")
+        .subtitle("How HDR videos are handled (10-bit SDR always direct-plays)")
+        .model(&hdr_model)
+        .selected(hdr_mode_to_index(&settings.playback.hdr_mode))
+        .build();
+
     let volume_spin = adw::SpinRow::with_range(0.0, 150.0, 5.0);
     volume_spin.set_title("Default Volume");
     volume_spin.set_value(settings.playback.default_volume);
 
     general_group.add(&resume_switch);
     general_group.add(&hwdec_combo);
+    general_group.add(&hdr_combo);
     general_group.add(&volume_spin);
 
     let controls_group = adw::PreferencesGroup::builder()
@@ -186,6 +195,7 @@ pub fn show_preferences(
         let mut updated = base.clone();
         updated.playback.resume_playback = resume_switch.is_active();
         updated.playback.hwdec_mode = index_to_hwdec_mode(hwdec_combo.selected());
+        updated.playback.hdr_mode = index_to_hdr_mode(hdr_combo.selected());
         updated.playback.default_volume = volume_spin.value();
         updated.playback.skip_short_secs = skip_short_spin.value();
         updated.playback.skip_long_secs = skip_long_spin.value();
@@ -259,6 +269,22 @@ fn index_to_hwdec_mode(index: u32) -> String {
     .to_string()
 }
 
+fn hdr_mode_to_index(mode: &str) -> u32 {
+    match mode {
+        "direct-limited" => 1,
+        // "transcode" and any unknown value -> the safe default.
+        _ => 0,
+    }
+}
+
+fn index_to_hdr_mode(index: u32) -> String {
+    match index {
+        1 => "direct-limited",
+        _ => "transcode",
+    }
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,6 +295,20 @@ mod tests {
             let idx = hwdec_mode_to_index(mode);
             assert_eq!(index_to_hwdec_mode(idx), *mode);
         }
+    }
+
+    #[test]
+    fn hdr_mode_roundtrip() {
+        for mode in &["transcode", "direct-limited"] {
+            let idx = hdr_mode_to_index(mode);
+            assert_eq!(index_to_hdr_mode(idx), *mode);
+        }
+    }
+
+    #[test]
+    fn unknown_hdr_mode_defaults_to_transcode() {
+        assert_eq!(hdr_mode_to_index("unknown"), 0);
+        assert_eq!(index_to_hdr_mode(99), "transcode");
     }
 
     #[test]
