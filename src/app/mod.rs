@@ -524,6 +524,7 @@ impl Component for App {
             .launch(())
             .forward(sender.input_sender(), |output| match output {
                 SidebarOutput::NavigateHome => AppMsg::NavigateHome,
+                SidebarOutput::AddSource => AppMsg::ShowConnectionDialog,
                 SidebarOutput::Navigate {
                     section,
                     source_type,

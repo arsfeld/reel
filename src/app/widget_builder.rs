@@ -60,7 +60,7 @@ pub fn build_widgets(
     // --- Hamburger menu (shared between all views) ---
     let menu = gtk::gio::Menu::new();
     menu.append(Some("Preferences"), Some("app.preferences"));
-    menu.append(Some("Plex Connection"), Some("app.plex-connection"));
+    menu.append(Some("Add Source"), Some("app.add-source"));
     menu.append(Some("About Reel"), Some("app.about"));
 
     // Register menu actions once on the root window
@@ -73,7 +73,7 @@ pub fn build_widgets(
     });
     action_group.add_action(&prefs_action);
 
-    let conn_action = gtk::gio::SimpleAction::new("plex-connection", None);
+    let conn_action = gtk::gio::SimpleAction::new("add-source", None);
     let sender_conn = sender.input_sender().clone();
     conn_action.connect_activate(move |_, _| {
         let _ = sender_conn.send(AppMsg::ShowConnectionDialog);

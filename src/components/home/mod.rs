@@ -219,12 +219,14 @@ impl Component for HomeView {
         // Empty state (no source configured / nothing to show)
         let empty_page = adw::StatusPage::builder()
             .title("Welcome to Reel")
-            .description("Connect a Plex server to see your Continue Watching and Recently Added")
+            .description(
+                "Connect a Plex or Jellyfin server to see your Continue Watching and Recently Added",
+            )
             .icon_name("folder-videos-symbolic")
             .build();
 
         let connect_btn = gtk::Button::builder()
-            .label("Connect to Plex")
+            .label("Connect a Server")
             .halign(gtk::Align::Center)
             .css_classes(["pill", "suggested-action"])
             .build();
