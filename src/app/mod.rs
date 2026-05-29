@@ -120,6 +120,10 @@ pub struct App {
     /// Epoch guard for overlapping quality/seek switches (U8): a resolve result
     /// from a superseded switch is discarded and its session stopped.
     switch_state: crate::components::player::switch_state::SwitchState,
+    /// Per-item render-failure fallback state (U4): once a direct-play stream
+    /// fails to render, the item sticks to server transcode for the session and
+    /// retries are bounded so a failing transcode can't loop.
+    render_fallback: crate::components::player::switch_state::RenderFallback,
     /// Fixed-interval keepalive timer for the active transcode session (U10/R15);
     /// `None` when no transcode is active. Pings independent of playback so a
     /// paused transcode is not reaped.
@@ -737,6 +741,7 @@ impl Component for App {
             transcode_base_offset: 0.0,
             current_decision: None,
             switch_state: crate::components::player::switch_state::SwitchState::new(),
+            render_fallback: crate::components::player::switch_state::RenderFallback::new(),
             keepalive_source: None,
             keepalive_failures: 0,
             current_audio_stream_id: None,

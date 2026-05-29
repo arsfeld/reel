@@ -13,6 +13,11 @@ pub enum PipelineBusMsg {
     Buffering {
         percent: i32,
     },
+    /// A stream/negotiation error that means the current stream cannot render
+    /// (e.g. the colorspace-convert stage failed to negotiate, or a missing
+    /// element) — distinct from a transport error. The App falls back by
+    /// re-resolving with a forced server transcode (U4/R4).
+    RenderFailed,
 }
 
 /// Action to take in response to a `GST_MESSAGE_BUFFERING`, derived purely from

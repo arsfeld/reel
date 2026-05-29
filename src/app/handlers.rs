@@ -194,6 +194,27 @@ pub fn handle_video_output(
             let quality = app.current_quality;
             resolve_playback_at(app, quality, position_secs, false, sender);
         }
+        VideoPlayerOutput::RenderFailed { position_secs } => {
+            // Direct-play couldn't render (U4/R4): fall back to a server
+            // transcode for this item, bounded so a failing transcode can't loop.
+            use crate::components::player::switch_state::FallbackAction;
+            match app.render_fallback.on_render_failure() {
+                FallbackAction::RetryWithTranscode => {
+                    sender.input(AppMsg::ShowToast(
+                        "Switching to a compatible format…".to_string(),
+                    ));
+                    let quality = app.current_quality;
+                    // force_transcode=true here; resolve_playback_at also ORs in
+                    // the now-sticky fallback state for subsequent re-resolves.
+                    resolve_playback_at(app, quality, position_secs, true, sender);
+                }
+                FallbackAction::GiveUp => {
+                    sender.input(AppMsg::ShowToast(
+                        "Can't play this video on this device.".to_string(),
+                    ));
+                }
+            }
+        }
         VideoPlayerOutput::SelectAudioTrack {
             stream_id,
             position_secs,
@@ -250,6 +271,10 @@ fn resolve_playback_at(
     if !supports_server_decision(item.source_type) || item.file_path.is_none() {
         return;
     }
+    // Once an item has fallen back to transcode after a render failure (U4),
+    // every re-resolve for it stays on transcode so a quality/track change
+    // doesn't retry direct-play and re-trigger the black screen.
+    let force_transcode = force_transcode || app.render_fallback.force_transcode();
     let req = crate::models::playback::PlaybackRequest {
         rating_key: item.external_id.clone(),
         part_key: item.file_path.clone().unwrap_or_default(),
@@ -439,6 +464,13 @@ fn begin_initial_playback(
     resume_secs: Option<f64>,
     sender: &ComponentSender<App>,
 ) {
+    // Reset/establish render-failure fallback state for the item being played
+    // (U4). Switching items clears prior stickiness; replaying the same item
+    // keeps it (it already failed to render).
+    if let Some(item) = media_item {
+        app.render_fallback.begin_item(&item.id);
+    }
+
     // A complete local download plays directly — no transcode decision needed.
     if let Some(local_url) = local_url {
         app.video_player.emit(VideoPlayerMsg::SetUrl {
