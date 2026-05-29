@@ -238,6 +238,9 @@ pub enum SidebarMsg {
 #[derive(Debug)]
 pub enum SidebarOutput {
     NavigateHome,
+    /// The "+" affordance in the sidebar header was clicked — open the
+    /// add-source connection dialog.
+    AddSource,
     /// Navigate to a library, carrying the owning source's identity so the app
     /// can scope the LibraryView list to the right source.
     Navigate {
@@ -285,6 +288,14 @@ impl SimpleComponent for Sidebar {
                 set_title_widget = &gtk::Label {
                     set_label: "Reel",
                     add_css_class: "title",
+                },
+                pack_end = &gtk::Button {
+                    set_icon_name: "list-add-symbolic",
+                    set_tooltip_text: Some("Add Source"),
+                    add_css_class: "flat",
+                    connect_clicked[sender] => move |_| {
+                        let _ = sender.output(SidebarOutput::AddSource);
+                    },
                 },
             },
 
