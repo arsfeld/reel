@@ -172,6 +172,41 @@ pub fn build_effective_watch_map(
     map
 }
 
+/// Merge a background-revalidation refetch with the currently-cached items on
+/// the revalidation path (KTD-4). The refetched server state is authoritative
+/// for every item EXCEPT one the user mutated locally *after* this refetch was
+/// dispatched — a racing scrobble the server hadn't registered when the refetch
+/// read. For those, the cached (local) watch fields are kept so a just-finished
+/// item isn't reverted. Any item whose last local mutation predates the dispatch
+/// takes the server state, so a legitimate server-side change (un-mark, reset
+/// elsewhere) still converges. This is NOT used on first load — that path keeps
+/// the unconditional [`build_effective_watch_map`] overlay.
+///
+/// `last_mutation` maps media id → the monotonic mutation sequence at its last
+/// local change; `dispatch_seq` is the sequence captured when the refetch was
+/// dispatched. An item is "racing" when `last_mutation[id] > dispatch_seq`.
+pub fn merge_revalidated(
+    refetched: Vec<MediaItem>,
+    cached: &[MediaItem],
+    last_mutation: &HashMap<String, u64>,
+    dispatch_seq: u64,
+) -> Vec<MediaItem> {
+    refetched
+        .into_iter()
+        .map(|mut item| {
+            let racing = last_mutation
+                .get(&item.id)
+                .is_some_and(|&seq| seq > dispatch_seq);
+            if racing && let Some(c) = cached.iter().find(|c| c.id == item.id) {
+                // Keep the local watch fields; everything else stays server-fresh.
+                item.watched = c.watched;
+                item.playback_position_ms = c.playback_position_ms;
+            }
+            item
+        })
+        .collect()
+}
+
 /// Derive a `WatchStatus` from a `(progress_fraction, watched)` pair as stored
 /// in `LibraryView`'s watch_data map. `watched` wins over progress.
 pub fn derived_watch_status(progress: f64, watched: bool) -> WatchStatus {
@@ -1319,6 +1354,54 @@ mod tests {
         assert_eq!(map.get(&in_progress.id), Some(&(0.5, false)));
         // Source silent → local entry retained as fallback.
         assert_eq!(map.get(&silent.id), Some(&(0.7, false)));
+    }
+
+    #[test]
+    fn merge_keeps_racing_local_mutation() {
+        // User finished "Dune" locally (cached watched=true) after a refetch was
+        // dispatched (seq 5 > dispatch 3); the refetch still reports unwatched.
+        let mut cached = movie("Dune");
+        cached.watched = true;
+        let mut refetched = movie("Dune"); // same id, server says unwatched
+        refetched.watched = false;
+        let mut last = HashMap::new();
+        last.insert(cached.id.clone(), 5);
+
+        let merged = merge_revalidated(vec![refetched], &[cached.clone()], &last, 3);
+        assert!(merged[0].watched, "racing local finish is not reverted");
+    }
+
+    #[test]
+    fn merge_converges_on_server_when_not_racing() {
+        // Item was un-marked on another device; the local mutation (seq 2)
+        // predates this refetch's dispatch (seq 3), so server state wins.
+        let mut cached = movie("Dune");
+        cached.watched = true;
+        let mut refetched = movie("Dune");
+        refetched.watched = false;
+        let mut last = HashMap::new();
+        last.insert(cached.id.clone(), 2);
+
+        let merged = merge_revalidated(vec![refetched], &[cached.clone()], &last, 3);
+        assert!(!merged[0].watched, "server downgrade propagates");
+    }
+
+    #[test]
+    fn merge_takes_server_when_no_local_mutation() {
+        let mut cached = movie("Dune");
+        cached.watched = true;
+        let mut refetched = movie("Dune");
+        refetched.watched = false;
+        let merged = merge_revalidated(vec![refetched], &[cached.clone()], &HashMap::new(), 0);
+        assert!(!merged[0].watched);
+    }
+
+    #[test]
+    fn merge_keeps_new_refetched_item_untouched() {
+        let fresh = movie("Brand New");
+        let merged = merge_revalidated(vec![fresh.clone()], &[], &HashMap::new(), 0);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].id, fresh.id);
     }
 
     #[test]
