@@ -28,7 +28,6 @@ use crate::services::download::transfer::{
     DownloadClient, TransferResult, confined_media_path, part_path,
 };
 use crate::services::download::{DownloadError, prune};
-use crate::services::media_source::MediaSource;
 
 use super::App;
 use super::utils::iso_now;
@@ -55,6 +54,7 @@ pub enum DownloadRunnerMsg {
 }
 
 pub use crate::components::downloads::DownloadItemAction;
+use crate::components::downloads::DownloadsViewMsg;
 
 /// How a failed transfer should affect the queue and UI, derived purely from
 /// the failure cause. Each `FailReason` maps to a distinct recovery posture
@@ -325,7 +325,16 @@ fn persist_state(
 
 /// Resolve the transfer arguments for a queued item from its repo row.
 fn resolve_transfer(app: &App, media_item_id: &str, part_key: &str) -> Option<TransferParams> {
-    let source = app.active_source.clone()?;
+    // Resolve the owning source from the item (the multi-source registry keys on
+    // each item's own source_type/source_id), so the transfer URL points at the
+    // server that actually holds this media.
+    let item = app.db.as_ref()?.with(|conn| {
+        crate::db::media_repo::MediaRepo::new(conn)
+            .find_by_id(media_item_id)
+            .ok()
+            .flatten()
+    })?;
+    let source = app.sources.for_item(&item)?;
     let folder = app.settings.downloads.effective_folder();
     let media_path = confined_media_path(&folder, media_item_id, part_key)
         .map_err(|e| warn!("Refusing unsafe download path: {e}"))
@@ -384,7 +393,7 @@ pub fn enqueue_download(app: &mut App, item: &MediaItem) {
 /// Enqueue an item, optionally as a member of a group. Upserts the self-contained
 /// row, then drives the pure queue and performs the resulting effects.
 pub fn enqueue_item(app: &mut App, item: &MediaItem, group_id: Option<String>) {
-    let Some(source) = app.active_source.clone() else {
+    let Some(source) = app.sources.for_item(item) else {
         app.toast("Connect a source before downloading");
         return;
     };
@@ -546,7 +555,7 @@ pub fn handle_runner_msg(app: &mut App, msg: DownloadRunnerMsg) {
         DownloadRunnerMsg::Progress {
             media_item_id,
             downloaded,
-            ..
+            total,
         } => {
             // Advisory byte count for the UI; the authoritative offset is the
             // on-disk `.part` length, so we only update the counter.
@@ -555,11 +564,25 @@ pub fn handle_runner_msg(app: &mut App, msg: DownloadRunnerMsg) {
                     let mut repo = DownloadsRepo::new(conn);
                     if let Ok(Some(mut row)) = repo.find(&media_item_id) {
                         row.byte_count = downloaded as i64;
+                        // Persist the total once it's known (from Content-Length)
+                        // so a structural rebuild — e.g. a sibling completing —
+                        // renders the right fraction rather than resetting the bar.
+                        if row.total_size.is_none()
+                            && let Some(t) = total
+                        {
+                            row.total_size = Some(t as i64);
+                        }
                         let _ = repo.upsert(&row);
                     }
                 });
             }
-            app.refresh_downloads_view();
+            // Update just this row in place instead of rebuilding the whole
+            // listbox on every tick (a rebuild would also drop/reload posters).
+            app.downloads_view.emit(DownloadsViewMsg::Progress {
+                media_item_id,
+                downloaded,
+                total,
+            });
         }
         DownloadRunnerMsg::Finished {
             media_item_id,
@@ -782,7 +805,7 @@ pub fn recover_on_startup(app: &mut App) {
 /// source is validated at startup and after a reconnect. No-op without a source
 /// (you can't download while offline) or while the queue is disk-full paused.
 pub fn start_pending(app: &mut App) {
-    if app.active_source.is_none() || app.downloads.disk_full {
+    if app.sources.is_empty() || app.downloads.disk_full {
         return;
     }
     let events = app.downloads.queue.schedule();

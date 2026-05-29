@@ -1,5 +1,36 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::models::media::MediaItem;
+use crate::models::watch::WatchProgress;
+
+/// Position (seconds) to resume playback from, honoring **server-wins**.
+///
+/// The source's own offset wins first ([`MediaItem::resume_position_secs`]).
+/// When the source has no resume opinion, we normally fall back to local
+/// progress — but a server-*watched* item must NOT resume from a stale local
+/// offset (AE6): the inverse of "server wins". So if the owning server says the
+/// item is watched, the local fallback is suppressed entirely; local is only
+/// consulted when the server has no opinion (e.g. an unreachable server or a
+/// `Local` source).
+///
+/// Superseded at the live Play call-site by [`super::watch_events::resume_position`]
+/// (which also folds in offline-download progress); retained for its server-wins /
+/// AE6 coverage of the source-watched fallback path.
+#[allow(dead_code)]
+pub fn resume_position_for(item: &MediaItem, local: Option<&WatchProgress>) -> Option<f64> {
+    if let Some(secs) = item.resume_position_secs() {
+        return Some(secs);
+    }
+    // Server gave no resume offset. If the owning server says watched, treat it
+    // as watched and ignore any stale local offset.
+    if item.watched && item.source_type.reports_watch_state() {
+        return None;
+    }
+    local
+        .filter(|progress| progress.should_show_resume())
+        .map(WatchProgress::resume_position)
+}
+
 /// Generate a UTC ISO 8601 timestamp string.
 pub fn iso_now() -> String {
     let now = SystemTime::now()
@@ -101,6 +132,7 @@ pub fn set_url_for_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::media::{MediaType, SourceType};
     use crate::models::playback::{PlaybackDecision, PlaybackDecisionKind};
 
     fn decision(kind: PlaybackDecisionKind) -> PlaybackDecision {
@@ -113,6 +145,48 @@ mod tests {
             throttled: false,
             audio_streams: Vec::new(),
             subtitle_streams: Vec::new(),
+        }
+    }
+
+    fn item(source_type: SourceType, watched: bool, position_ms: Option<i64>) -> MediaItem {
+        MediaItem {
+            id: "id".into(),
+            source_type,
+            source_id: "s".into(),
+            external_id: "e".into(),
+            media_type: MediaType::Movie,
+            title: "T".into(),
+            year: None,
+            overview: None,
+            content_rating: None,
+            rating: None,
+            runtime_minutes: Some(100),
+            poster_path: None,
+            series_poster_path: None,
+            backdrop_path: None,
+            genres: vec![],
+            parent_id: None,
+            season_number: None,
+            episode_number: None,
+            air_date: None,
+            file_path: None,
+            video_resolution: None,
+            hdr: None,
+            added_at: String::new(),
+            updated_at: String::new(),
+            playback_position_ms: position_ms,
+            watched,
+            library_section_id: None,
+        }
+    }
+
+    fn local(position: f64) -> WatchProgress {
+        WatchProgress {
+            media_item_id: "id".into(),
+            position_seconds: position,
+            duration_seconds: 6000.0,
+            watched: false,
+            last_watched_at: String::new(),
         }
     }
 
@@ -148,5 +222,41 @@ mod tests {
             set_url_for_decision(&decision(PlaybackDecisionKind::Transcode), None);
         assert_eq!(resume, Some(0.0));
         assert_eq!(base, 0.0);
+    }
+
+    #[test]
+    fn server_offset_wins_over_local() {
+        // In-progress server offset (40 min into a 100 min film).
+        let it = item(SourceType::Jellyfin, false, Some(40 * 60_000));
+        let got = resume_position_for(&it, Some(&local(310.0)));
+        assert_eq!(got, Some(40.0 * 60.0 - 10.0));
+    }
+
+    #[test]
+    fn server_watched_item_ignores_stale_local_offset() {
+        // Server says watched; a stale local in-progress offset must be ignored.
+        let it = item(SourceType::Jellyfin, true, None);
+        assert_eq!(resume_position_for(&it, Some(&local(310.0))), None);
+    }
+
+    #[test]
+    fn falls_back_to_local_when_server_silent() {
+        // Server has no offset and isn't watched → use local progress.
+        let it = item(SourceType::Plex, false, None);
+        assert_eq!(resume_position_for(&it, Some(&local(310.0))), Some(300.0));
+    }
+
+    #[test]
+    fn unreachable_server_with_no_opinion_uses_local() {
+        // No server opinion at all (None offset, not watched) falls back to local
+        // — this is the AE3 path.
+        let it = item(SourceType::Jellyfin, false, None);
+        assert_eq!(resume_position_for(&it, Some(&local(310.0))), Some(300.0));
+    }
+
+    #[test]
+    fn no_local_and_no_server_offset_is_none() {
+        let it = item(SourceType::Plex, false, None);
+        assert_eq!(resume_position_for(&it, None), None);
     }
 }

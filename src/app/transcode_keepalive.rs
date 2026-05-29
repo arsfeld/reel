@@ -54,7 +54,7 @@ pub(super) fn stop(app: &mut App) {
 pub(super) fn tick(app: &App, sender: &ComponentSender<App>) {
     let (Some(session), Some(source)) = (
         app.active_transcode_session.clone(),
-        app.active_source.clone(),
+        app.now_playing_source(),
     ) else {
         return;
     };

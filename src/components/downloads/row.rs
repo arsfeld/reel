@@ -22,6 +22,10 @@ pub struct DownloadItemView {
     pub episode_number: Option<i32>,
     /// Fractional progress `[0,1]` when a total size is known, else `None`.
     pub progress: Option<f64>,
+    /// Bytes transferred so far (advisory), for the size-aware status line.
+    pub byte_count: i64,
+    /// Expected total size when known, for the size-aware status line.
+    pub total_size: Option<i64>,
     pub poster_path: Option<String>,
 }
 
@@ -39,6 +43,8 @@ impl DownloadItemView {
             season_number: d.season_number,
             episode_number: d.episode_number,
             progress,
+            byte_count: d.byte_count,
+            total_size: d.total_size,
             poster_path: d.poster_path.clone(),
         }
     }
@@ -348,6 +354,8 @@ mod tests {
             season_number: Some(1),
             episode_number: Some(1),
             progress: None,
+            byte_count: 0,
+            total_size: None,
             poster_path: None,
         }];
         assert!(group_delete_needs_confirm(&with_completed));

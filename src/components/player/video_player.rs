@@ -501,6 +501,13 @@ impl Component for VideoPlayer {
                                     set_hexpand: true,
                                     set_draw_value: false,
                                     set_range: (0.0, 1.0),
+                                    // Show the streaming-cache read-ahead as a
+                                    // filled "buffered" track behind the thumb.
+                                    // Don't restrict seeking to it — a forward
+                                    // seek past the buffer is allowed (it just
+                                    // needs the network).
+                                    set_show_fill_level: true,
+                                    set_restrict_to_fill_level: false,
                                     add_css_class: "video-osd-seek",
                                 },
 
@@ -1132,6 +1139,14 @@ impl VideoPlayer {
             .is_some_and(|t| t.elapsed() < Duration::from_millis(400));
         let max = (self.duration_us.max(1)) as f64;
         widgets.seek_scale.set_range(0.0, max);
+        // Buffered (cached) extent behind the thumb. 0.0 for local files /
+        // non-buffering streams, so the fill track stays invisible there.
+        let buffered = self
+            .media
+            .as_ref()
+            .map(|m| m.buffered_fraction())
+            .unwrap_or(0.0);
+        widgets.seek_scale.set_fill_level(buffered * max);
         if !media_seeking && !user_holding {
             let pos = (self.display_position_us().clamp(0, self.duration_us.max(0))) as f64;
             self.suppress_scale.set(true);

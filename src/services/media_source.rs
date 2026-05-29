@@ -70,6 +70,17 @@ pub trait MediaSource: Send + Sync {
         ))
     }
 
+    /// Stop a server-side transcode session (R14). Default: no-op — only sources
+    /// with a server transcoder (Plex) hold sessions to stop.
+    async fn stop_transcode(&self, _session: &str) -> Result<(), SourceError> {
+        Ok(())
+    }
+
+    /// Keep a server-side transcode session alive (R15). Default: no-op.
+    async fn ping_transcode(&self, _session: &str) -> Result<(), SourceError> {
+        Ok(())
+    }
+
     /// Describe how to download an item's original file. Default: not supported
     /// — local-filesystem sources inherit this (their media is already on
     /// disk), so only remote sources (Plex in v1) override it.
