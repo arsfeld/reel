@@ -16,6 +16,7 @@
 
 use gst::prelude::*;
 
+use crate::models::playback::{QualityPreset, QualitySelection};
 use crate::player::gst_pipeline::make_element;
 
 /// Build a `glupload ! glcolorconvert` bin to install as `playbin3`'s
@@ -51,6 +52,38 @@ pub(crate) fn build_color_convert_filter() -> Option<gst::Bin> {
     Some(bin)
 }
 
+/// One-time startup capability probe: can the GL colorspace-convert elements be
+/// instantiated in this environment? Cheap (element-factory creation only, no
+/// pipeline run). When false, the convert stage can't be built, so 10-bit
+/// direct-play is never advertised and content keeps transcoding server-side.
+pub(crate) fn probe_can_render_10bit() -> bool {
+    make_element("glupload").is_some() && make_element("glcolorconvert").is_some()
+}
+
+/// Whether to advertise 10-bit (SDR) direct-play for a request — a pure
+/// decision combining the startup probe with the user's quality choice.
+///
+/// HDR-vs-SDR is **not** decided here: the transcode profile advertises
+/// "10-bit SDR direct-play OK" and the server transcodes HDR per-file from that
+/// directive. This function only gates on whether the client can render 10-bit
+/// at all and whether the user's quality selection already implies a transcode:
+/// an explicit `force_transcode`, or any capped `Manual` rung (a bitrate/
+/// resolution cap means the server must re-encode anyway). `Auto` and
+/// `Manual(Original)` permit direct-play when the probe is capable.
+pub(crate) fn can_direct_play(
+    probe_capable: bool,
+    quality: QualitySelection,
+    force_transcode: bool,
+) -> bool {
+    if !probe_capable || force_transcode {
+        return false;
+    }
+    match quality {
+        QualitySelection::Auto | QualitySelection::Manual(QualityPreset::Original) => true,
+        QualitySelection::Manual(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +111,49 @@ mod tests {
                 assert!(make_element("glupload").is_none() || make_element("glcolorconvert").is_none());
             }
         }
+    }
+
+    #[test]
+    fn can_direct_play_allows_auto_when_capable() {
+        assert!(can_direct_play(true, QualitySelection::Auto, false));
+    }
+
+    #[test]
+    fn can_direct_play_allows_manual_original_when_capable() {
+        assert!(can_direct_play(
+            true,
+            QualitySelection::Manual(QualityPreset::Original),
+            false
+        ));
+    }
+
+    #[test]
+    fn can_direct_play_blocks_when_incapable() {
+        assert!(!can_direct_play(false, QualitySelection::Auto, false));
+        assert!(!can_direct_play(
+            false,
+            QualitySelection::Manual(QualityPreset::Original),
+            false
+        ));
+    }
+
+    #[test]
+    fn can_direct_play_blocks_on_capped_manual_rung() {
+        // A bitrate/resolution cap implies a transcode — don't advertise direct.
+        assert!(!can_direct_play(
+            true,
+            QualitySelection::Manual(QualityPreset::P1080Mbps8),
+            false
+        ));
+    }
+
+    #[test]
+    fn force_transcode_always_blocks_direct_play() {
+        assert!(!can_direct_play(true, QualitySelection::Auto, true));
+        assert!(!can_direct_play(
+            true,
+            QualitySelection::Manual(QualityPreset::Original),
+            true
+        ));
     }
 }

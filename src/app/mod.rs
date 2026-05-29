@@ -133,6 +133,10 @@ pub struct App {
     /// per title.
     current_audio_stream_id: Option<i64>,
     current_subtitle_stream_id: Option<i64>,
+    /// Whether the local pipeline can render 10-bit content (probed once at
+    /// startup). Gates whether 10-bit SDR direct-play is advertised to the
+    /// server; `false` keeps everything 10-bit on the transcode path.
+    can_render_10bit: bool,
 }
 
 impl App {
@@ -516,6 +520,11 @@ impl Component for App {
         // before any playback pipeline can begin writing a new one.
         reclaim_stream_cache();
 
+        // One-time render-capability probe: can the pipeline build the GL
+        // colorspace-convert stage that lets 10-bit content render? Gates
+        // whether 10-bit SDR direct-play is advertised to the server.
+        let can_render_10bit = crate::player::capabilities::probe_can_render_10bit();
+
         let settings = Settings::load();
         let (downloads, download_rx) =
             DownloadManager::new(settings.downloads.effective_concurrency());
@@ -732,6 +741,7 @@ impl Component for App {
             keepalive_failures: 0,
             current_audio_stream_id: None,
             current_subtitle_stream_id: None,
+            can_render_10bit,
         };
 
         // Reconcile downloads against disk and rebuild the queue (no transfers

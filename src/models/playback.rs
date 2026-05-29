@@ -291,6 +291,12 @@ pub struct PlaybackRequest {
     pub quality: QualitySelection,
     /// Force a transcode even if the file looks compatible (R10/KTD11).
     pub force_transcode: bool,
+    /// Whether the client can render 10-bit content locally, so the transcode
+    /// profile may advertise 10-bit SDR direct-play (HDR still transcodes,
+    /// enforced server-side by the profile directive). Set from the startup
+    /// capability probe gated by the quality selection; `false` keeps the
+    /// conservative bit-depth ceiling (everything 10-bit transcodes).
+    pub can_direct_play_10bit: bool,
     pub audio_stream_id: Option<i64>,
     pub subtitle_stream_id: Option<i64>,
     /// Part-relative resume offset in seconds.
