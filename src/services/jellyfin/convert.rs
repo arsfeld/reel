@@ -316,6 +316,7 @@ mod tests {
                 path: Some("/movies/dune.mkv".to_string()),
                 container: Some("mkv".to_string()),
                 name: None,
+                ..Default::default()
             }],
             collection_type: None,
             width: Some(1920),
