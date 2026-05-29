@@ -52,6 +52,18 @@ impl PlaybackPipeline {
         // subtitleoverlay). Wrapping the video sink in subtitleoverlay and
         // setting its removed `video-sink` property panics on GStreamer 1.26+.
         playbin.set_property("video-sink", &paintable_sink);
+
+        // Insert a colorspace-convert stage (`glupload ! glcolorconvert`) ahead
+        // of the sink via playbin3's `video-filter`. Without it, 10-bit /
+        // BT.2020 frames fail to negotiate to gtk4paintablesink and play as a
+        // black video area. `video-filter` composes inside playbin3 ahead of the
+        // sink — unlike wrapping the sink in a bin, which panics on 1.26+ (see
+        // the note above). If the GL elements are unavailable we install nothing
+        // and 10-bit direct-play is simply not advertised by the capability gate.
+        if let Some(filter) = crate::player::capabilities::build_color_convert_filter() {
+            playbin.set_property("video-filter", &filter);
+        }
+
         playbin.set_property("uri", url);
         // Network streams (http/https) get GStreamer's `download` play flag:
         // the stream is routed through an internally-created `downloadbuffer`
@@ -405,7 +417,7 @@ fn set_download_flag(playbin: &gst::Element) -> bool {
     true
 }
 
-fn make_element(name: &str) -> Option<gst::Element> {
+pub(crate) fn make_element(name: &str) -> Option<gst::Element> {
     match gst::ElementFactory::make(name).build() {
         Ok(el) => Some(el),
         Err(e) => {
