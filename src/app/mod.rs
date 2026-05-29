@@ -322,6 +322,10 @@ pub enum AppMsg {
     SidebarEditModeExited,
     ShowMovieDetail(crate::models::media::MediaItem),
     ShowShowDetail(crate::models::media::MediaItem),
+    /// Open the detail page for a downloaded item, resolving the stored
+    /// `media_item_id` (a movie's, or an episode's) to a `MediaItem` from the
+    /// local DB — episodes route to their parent show.
+    OpenDownloadDetail(String),
     GoBack,
     VideoOutput(VideoPlayerOutput),
     PlayMedia {
@@ -567,6 +571,9 @@ impl Component for App {
                     media_item_id,
                     action,
                 },
+                DownloadsViewOutput::OpenDetail(media_item_id) => {
+                    AppMsg::OpenDownloadDetail(media_item_id)
+                }
             },
         );
 
@@ -798,6 +805,34 @@ impl Component for App {
                     .child(self.show_detail.widget())
                     .build();
                 self.nav_view.push(&page);
+            }
+            AppMsg::OpenDownloadDetail(media_item_id) => {
+                // Resolve the download's stored id to a library MediaItem; an
+                // episode opens its parent show's detail page.
+                let resolved = self.db.as_ref().and_then(|db| {
+                    db.with(|conn| {
+                        let mut repo = crate::db::media_repo::MediaRepo::new(conn);
+                        let item = repo.find_by_id(&media_item_id).ok().flatten()?;
+                        if item.media_type == MediaType::Episode {
+                            let parent_id = item.parent_id.clone()?;
+                            repo.find_by_id(&parent_id).ok().flatten()
+                        } else {
+                            Some(item)
+                        }
+                    })
+                });
+                match resolved {
+                    Some(item) => match item.media_type {
+                        MediaType::Movie => sender.input(AppMsg::ShowMovieDetail(item)),
+                        MediaType::Show => sender.input(AppMsg::ShowShowDetail(item)),
+                        _ => {
+                            sender.input(AppMsg::ShowToast("Can't open this download".to_string()))
+                        }
+                    },
+                    None => {
+                        sender.input(AppMsg::ShowToast("Details unavailable offline".to_string()));
+                    }
+                }
             }
             AppMsg::GoBack => {
                 if self.stack.visible_child_name().as_deref() == Some("player") {
