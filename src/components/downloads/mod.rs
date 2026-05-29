@@ -16,17 +16,17 @@ use relm4::prelude::*;
 use crate::models::download::{Download, DownloadGroup, DownloadState, FailReason};
 use crate::services::artwork::ArtworkCache;
 use crate::services::download::GroupStatus;
+use crate::services::library_filter::GridDensity;
 use crate::services::media_source::MediaSource;
 
 use row::{DownloadItemView, DownloadRow, derive_rows, group_retry_targets};
 
-/// Displayed poster-card size in the downloads grid (2:3 movie poster),
-/// matching the library grid's proportions at a slightly smaller scale.
-const CARD_W: i32 = 160;
-const CARD_H: i32 = 240;
-/// Requested transcode size (2× the display size for crisp HiDPI rendering).
-const POSTER_REQ_W: u32 = 320;
-const POSTER_REQ_H: u32 = 480;
+/// Requested artwork size, matching the library grid's request so downloaded
+/// posters are as crisp. The displayed card size is driven by [`GridDensity`]
+/// (see [`DownloadsView::density`]); the request stays generous so the same
+/// texture stays sharp at any density.
+const POSTER_REQ_W: u32 = 300;
+const POSTER_REQ_H: u32 = 450;
 
 /// GTK widget handles for a rendered card, kept so progress ticks and arriving
 /// artwork can update the card in place without rebuilding the whole grid.
@@ -75,6 +75,16 @@ pub struct DownloadsView {
     /// Per-card widget handles for in-place progress/poster updates. Keyed by
     /// `media_item_id` for item cards and by `group_id` for show cards.
     row_widgets: HashMap<String, RowWidgets>,
+    /// Poster-card size, mirroring the library grid's density so the two grids
+    /// match. Updated via [`DownloadsViewMsg::SetDensity`].
+    density: GridDensity,
+    /// True while a grid rebuild is queued on the main-loop idle. A burst of
+    /// `SetDownloads` — e.g. a whole season completing, which fires one snapshot
+    /// per finished episode — would otherwise tear down and rebuild the entire
+    /// FlowBox per completion (cards × completions of widget churn) and jam the
+    /// GTK loop. Coalescing collapses the burst into a single rebuild once the
+    /// loop drains.
+    rebuild_scheduled: bool,
 }
 
 #[allow(dead_code)]
@@ -88,6 +98,8 @@ pub enum DownloadsViewMsg {
     },
     /// Provide the active source + artwork cache so rows can show posters.
     SetSource(Arc<dyn MediaSource>, Arc<ArtworkCache>),
+    /// Match the library grid's poster density (re-renders the grid).
+    SetDensity(GridDensity),
     /// A transfer advanced: update just this row's progress bar + status line.
     Progress {
         media_item_id: String,
@@ -109,6 +121,9 @@ pub enum DownloadsViewMsg {
         media_item_ids: Vec<String>,
         action: DownloadItemAction,
     },
+    /// Internal: run the rebuild that [`schedule_rebuild`](DownloadsView::schedule_rebuild)
+    /// queued on the main-loop idle. Coalesces a burst of state updates.
+    FlushRebuild,
 }
 
 // Manual `Debug` (relm4 requires it) because `Arc<dyn MediaSource>` and
@@ -118,6 +133,7 @@ impl std::fmt::Debug for DownloadsViewMsg {
         match self {
             Self::SetDownloads { .. } => write!(f, "SetDownloads(..)"),
             Self::SetSource(..) => write!(f, "SetSource(..)"),
+            Self::SetDensity(d) => write!(f, "SetDensity({d:?})"),
             Self::Progress {
                 media_item_id,
                 downloaded,
@@ -129,6 +145,7 @@ impl std::fmt::Debug for DownloadsViewMsg {
                 action,
             } => write!(f, "Action({media_item_id}, {action:?})"),
             Self::GroupAction { action, .. } => write!(f, "GroupAction({action:?})"),
+            Self::FlushRebuild => write!(f, "FlushRebuild"),
         }
     }
 }
@@ -145,6 +162,10 @@ pub enum DownloadsViewOutput {
     /// a movie's own id, or (for a show card) any member episode's id — the app
     /// resolves an episode up to its parent show.
     OpenDetail(String),
+    /// Play a completed download straight from its local file, using the
+    /// download's own metadata snapshot — works fully offline (R16). Carries the
+    /// download's `media_item_id`.
+    PlayDownload(String),
 }
 
 #[relm4::component(pub)]
@@ -202,6 +223,8 @@ impl SimpleComponent for DownloadsView {
             artwork_cache: None,
             texture_cache: HashMap::new(),
             row_widgets: HashMap::new(),
+            density: GridDensity::default(),
+            rebuild_scheduled: false,
         };
         model.rebuild(&sender);
         ComponentParts { model, widgets }
@@ -219,13 +242,23 @@ impl SimpleComponent for DownloadsView {
                 self.groups = groups;
                 self.over_budget_warning = over_budget_warning;
                 self.disk_full = disk_full;
-                self.rebuild(&sender);
+                self.schedule_rebuild(&sender);
             }
             DownloadsViewMsg::SetSource(source, artwork_cache) => {
                 self.source = Some(source);
                 self.artwork_cache = Some(artwork_cache);
                 // Posters need the source's artwork URL; re-render now that it's
                 // available (the first snapshot rendered before the source did).
+                self.schedule_rebuild(&sender);
+            }
+            DownloadsViewMsg::SetDensity(density) => {
+                if self.density != density {
+                    self.density = density;
+                    self.schedule_rebuild(&sender);
+                }
+            }
+            DownloadsViewMsg::FlushRebuild => {
+                self.rebuild_scheduled = false;
                 self.rebuild(&sender);
             }
             DownloadsViewMsg::Progress {
@@ -279,6 +312,23 @@ struct GroupCardInfo<'a> {
 }
 
 impl DownloadsView {
+    /// Queue a single grid rebuild on the next main-loop idle, coalescing a
+    /// burst of state updates into one. The rebuild tears down and rebuilds
+    /// every poster card, so doing it per `SetDownloads` during a season
+    /// download (one snapshot per finished episode) jams the GTK loop; a flag +
+    /// idle callback collapses the burst into one rebuild once the loop drains.
+    /// No-op if a rebuild is already pending.
+    fn schedule_rebuild(&mut self, sender: &ComponentSender<Self>) {
+        if self.rebuild_scheduled {
+            return;
+        }
+        self.rebuild_scheduled = true;
+        let input = sender.input_sender().clone();
+        gtk::glib::idle_add_local_once(move || {
+            let _ = input.send(DownloadsViewMsg::FlushRebuild);
+        });
+    }
+
     /// Update the banner and rebuild the listbox from the current state.
     fn rebuild(&mut self, sender: &ComponentSender<Self>) {
         // Banner: disk-full takes precedence over the over-budget warning.
@@ -401,7 +451,11 @@ impl DownloadsView {
     /// progress overlaid at the bottom and the per-item action buttons revealed
     /// over the poster on hover. The title sits beneath the poster.
     fn item_card(&mut self, item: &DownloadItemView, sender: &ComponentSender<Self>) -> gtk::Box {
-        let card = build_poster_card(&item_label(item));
+        let card = build_poster_card(
+            &item_label(item),
+            self.density.card_width(),
+            self.density.card_height(),
+        );
         let poster_url = self.load_poster(
             &card.picture,
             &card.placeholder,
@@ -431,8 +485,13 @@ impl DownloadsView {
             ));
         }
 
-        // Click the poster (anywhere but the action buttons) to open its detail.
-        attach_open_gesture(&card.container, &item.media_item_id, sender);
+        // A completed download plays straight from its local file on click
+        // (anywhere but the action buttons). While it's still transferring there
+        // is nothing to play, so the card isn't clickable — only its hover-tray
+        // actions respond.
+        if item.state == DownloadState::Completed {
+            attach_play_gesture(&card.container, &item.media_item_id, sender);
+        }
 
         self.row_widgets.insert(
             item.media_item_id.clone(),
@@ -459,7 +518,7 @@ impl DownloadsView {
             total,
             episodes,
         } = info;
-        let card = build_poster_card(title);
+        let card = build_poster_card(title, self.density.card_width(), self.density.card_height());
 
         // Poster comes from any member (episodes fall back to the series poster).
         let poster_path = episodes.iter().find_map(|e| e.poster_path.clone());
@@ -547,6 +606,25 @@ fn attach_open_gesture(
     click.connect_released(move |gesture, _n_press, _x, _y| {
         gesture.set_state(gtk::EventSequenceState::Claimed);
         let _ = out.send(DownloadsViewOutput::OpenDetail(id.clone()));
+    });
+    widget.add_controller(click);
+}
+
+/// Attach a click gesture that plays a completed download from its local file.
+/// Like [`attach_open_gesture`] it lives on the card container, so a click
+/// anywhere but the action buttons starts playback; the buttons claim their own
+/// clicks and never trigger it.
+fn attach_play_gesture(
+    widget: &impl IsA<gtk::Widget>,
+    media_item_id: &str,
+    sender: &ComponentSender<DownloadsView>,
+) {
+    let click = gtk::GestureClick::new();
+    let out = sender.output_sender().clone();
+    let id = media_item_id.to_string();
+    click.connect_released(move |gesture, _n_press, _x, _y| {
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        let _ = out.send(DownloadsViewOutput::PlayDownload(id.clone()));
     });
     widget.add_controller(click);
 }
@@ -643,11 +721,24 @@ struct PosterCard {
 /// poster, a bottom scrim with the status line + progress bar overlaid, a
 /// hover-revealed action tray, and the title beneath. The caller fills in the
 /// poster, status text, progress, and action buttons.
-fn build_poster_card(title: &str) -> PosterCard {
+fn build_poster_card(title: &str, card_w: i32, card_h: i32) -> PosterCard {
+    // The poster Picture takes its *natural* size from the loaded texture, which
+    // is larger than the card. In a homogeneous FlowBox that natural size sizes
+    // every cell, so a loaded poster blows the whole grid up. Anchor the card to
+    // a fixed-size sizer used as the Overlay's main child (overlays don't count
+    // toward the Overlay's measured size), and let the Picture ride as an
+    // expanding overlay that fills — and crops to — that fixed box.
+    let sizer = gtk::Box::builder()
+        .width_request(card_w)
+        .height_request(card_h)
+        .build();
+
     let picture = gtk::Picture::builder()
         .content_fit(gtk::ContentFit::Cover)
-        .width_request(CARD_W)
-        .height_request(CARD_H)
+        .hexpand(true)
+        .vexpand(true)
+        .halign(gtk::Align::Fill)
+        .valign(gtk::Align::Fill)
         .css_classes(["media-card-poster"])
         .build();
 
@@ -695,7 +786,8 @@ fn build_poster_card(title: &str) -> PosterCard {
         .build();
 
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&picture));
+    overlay.set_child(Some(&sizer));
+    overlay.add_overlay(&picture);
     overlay.add_overlay(&scrim);
     overlay.add_overlay(&placeholder);
     overlay.add_overlay(&status);
@@ -721,7 +813,7 @@ fn build_poster_card(title: &str) -> PosterCard {
     let container = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
-        .width_request(CARD_W)
+        .width_request(card_w)
         // Keep the card at its natural width, centered in its grid cell —
         // without this it fills (and stretches) the homogeneous FlowBox cell.
         .halign(gtk::Align::Center)

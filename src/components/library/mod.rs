@@ -189,6 +189,8 @@ pub enum LibraryViewOutput {
         library_id: String,
         state: LibraryUiState,
     },
+    /// The poster density changed; other grids (e.g. Downloads) follow it.
+    DensityChanged(GridDensity),
 }
 
 pub enum LibraryViewCmd {
@@ -857,6 +859,8 @@ impl Component for LibraryView {
                 // Update grid view column constraints
                 self.grid.view.set_min_columns(density.min_columns());
                 self.rebuild_grid(&sender);
+                // Let other grids (Downloads) match the chosen density.
+                let _ = sender.output(LibraryViewOutput::DensityChanged(density));
             }
             LibraryViewMsg::ViewModeChanged(view_mode) => {
                 self.view_mode = view_mode;
@@ -936,13 +940,26 @@ impl Component for LibraryView {
                 self.rebuild_continue_watching(&sender);
             }
             LibraryViewMsg::SetDownloadedIds(ids) => {
-                // Only rebuild when the set actually changed — the app pushes
-                // this on download state changes, which can recur rapidly, and a
-                // full grid rebuild per push would jam the UI.
+                // The app pushes this on every download state change, which during
+                // a multi-episode download recurs many times a second. A full grid
+                // rebuild per push (307 items, ~100-300ms each) jams the GTK loop,
+                // so flip only the affected cards' badge in place instead.
                 if ids != self.downloaded_ids {
                     self.downloaded_ids = ids;
-                    if !self.all_items.is_empty() {
-                        self.rebuild_grid(&sender);
+                    let len = self.grid.len();
+                    for i in 0..len {
+                        if let Some(item) = self.grid.get(i) {
+                            let mut card = item.borrow_mut();
+                            let now = self.downloaded_ids.contains(&card.media_id);
+                            if card.downloaded != now {
+                                card.downloaded = now;
+                                // Mutating the data model alone does not re-run
+                                // bind(); update the badge widget directly.
+                                if let Some(ref icon) = card.downloaded_widget {
+                                    icon.set_visible(now);
+                                }
+                            }
+                        }
                     }
                 }
             }

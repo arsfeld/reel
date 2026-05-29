@@ -368,12 +368,13 @@ gridview > child:selected .media-card-frame {
     background-color: @accent_color;
 }
 
-.watched-indicator {
-    background-color: alpha(@accent_color, 0.88);
+/* Small corner dot marking UNwatched items (Infuse-style). Watched items
+   have no indicator at all. */
+.unwatched-indicator {
+    background-color: @accent_color;
     border-radius: 50%;
-    padding: 5px;
-    color: white;
-    -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    border: 1.5px solid alpha(white, 0.9);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 /* --- Home shelf cards --- */
