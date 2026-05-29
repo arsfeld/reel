@@ -94,6 +94,14 @@ pub struct PlaybackSettings {
     pub skip_long_secs: f64,
     /// Default playback speed (0.25-4.0).
     pub default_speed: f64,
+    /// How HDR content is handled: "transcode" (default — server tone-maps to
+    /// SDR) or "direct-limited" (direct-play HDR even without hardware
+    /// tone-mapping, accepting washed-out color). This is the forward seam for
+    /// the HDR direct-play follow-up; today HDR always transcodes regardless of
+    /// this value (only 10-bit *SDR* direct-plays in this release). 10-bit SDR is
+    /// unaffected by this setting. The settings dialog maps unknown values back
+    /// to the safe default.
+    pub hdr_mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +160,7 @@ impl Default for PlaybackSettings {
             skip_short_secs: 10.0,
             skip_long_secs: 60.0,
             default_speed: 1.0,
+            hdr_mode: "transcode".to_string(),
         }
     }
 }
@@ -235,10 +244,19 @@ mod tests {
         assert_eq!(s.playback.skip_short_secs, 10.0);
         assert_eq!(s.playback.skip_long_secs, 60.0);
         assert_eq!(s.playback.default_speed, 1.0);
+        assert_eq!(s.playback.hdr_mode, "transcode");
         assert_eq!(s.subtitles.preferred_language, None);
         assert_eq!(s.subtitles.font_family, "Sans");
         assert_eq!(s.subtitles.font_size, 36);
         assert!(s.library.per_library.is_empty());
+    }
+
+    #[test]
+    fn hdr_mode_roundtrips_through_toml() {
+        let mut s = Settings::default();
+        s.playback.hdr_mode = "direct-limited".to_string();
+        let parsed: Settings = toml::from_str(&toml::to_string_pretty(&s).unwrap()).unwrap();
+        assert_eq!(parsed.playback.hdr_mode, "direct-limited");
     }
 
     // --- Serialization roundtrip ---
@@ -267,6 +285,7 @@ mod tests {
                 skip_short_secs: 5.0,
                 skip_long_secs: 30.0,
                 default_speed: 1.5,
+                hdr_mode: "direct-limited".to_string(),
             },
             subtitles: SubtitleSettings {
                 preferred_language: Some("en".to_string()),
@@ -285,6 +304,7 @@ mod tests {
         assert_eq!(parsed.playback.skip_short_secs, 5.0);
         assert_eq!(parsed.playback.skip_long_secs, 30.0);
         assert_eq!(parsed.playback.default_speed, 1.5);
+        assert_eq!(parsed.playback.hdr_mode, "direct-limited");
         assert_eq!(parsed.subtitles.preferred_language, Some("en".to_string()));
         assert_eq!(parsed.subtitles.font_family, "Noto Sans");
         assert_eq!(parsed.subtitles.font_size, 48);
