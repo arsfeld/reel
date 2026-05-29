@@ -438,6 +438,11 @@ impl Component for HomeView {
                     .any(|(source_type, _, _)| source_type.provides_server_hubs());
                 if has_server && self.source.is_some() {
                     self.spawn_home_fetch(true, &sender);
+                } else {
+                    // Can't dispatch (no server source, or browsed source not set
+                    // yet on a startup race). Clear App's in-flight flag so a later
+                    // revisit can revalidate again — otherwise it sticks forever.
+                    let _ = sender.output(HomeViewOutput::RevalidationDone);
                 }
             }
             HomeViewMsg::ShowCached(home) => {
@@ -1008,6 +1013,16 @@ mod tests {
     fn connection_failure_is_a_real_error() {
         let r: Result<Vec<MediaItem>, SourceError> = Err(SourceError::Connection("timeout".into()));
         assert!(is_real_source_error(&r));
+    }
+
+    #[test]
+    fn auth_and_not_found_are_real_errors() {
+        let auth: Result<Vec<MediaItem>, SourceError> = Err(SourceError::Auth("401".into()));
+        let nf: Result<Vec<MediaItem>, SourceError> = Err(SourceError::NotFound("gone".into()));
+        let other: Result<Vec<MediaItem>, SourceError> = Err(SourceError::Other("x".into()));
+        assert!(is_real_source_error(&auth));
+        assert!(is_real_source_error(&nf));
+        assert!(is_real_source_error(&other));
     }
 
     #[test]

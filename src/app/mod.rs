@@ -318,7 +318,6 @@ impl App {
                 .map_err(|e| e.to_string());
             AppCmd::LibraryRevalidated {
                 cache_key,
-                section_key,
                 entry_epoch,
                 source_set_epoch,
                 dispatch_seq,
@@ -673,7 +672,6 @@ pub enum AppCmd {
     /// the stamped epochs; merged with any racing local mutation (U5/U6/U7).
     LibraryRevalidated {
         cache_key: String,
-        section_key: String,
         entry_epoch: u64,
         source_set_epoch: u64,
         dispatch_seq: u64,
@@ -1131,9 +1129,16 @@ impl Component for App {
                 }
             }
             AppMsg::CacheLibraryItems { section_key, items } => {
-                // Store the just-fetched items so a later revisit renders instantly.
-                if let Some((st, source_id)) = &self.browsed_source {
-                    let key = SessionContentCache::library_key(*st, source_id, &section_key);
+                // Key from the items' OWN source, not the (possibly already
+                // advanced) browsed source: a fetch for library A returning after
+                // the user navigated to B must still cache under A's key. Empty
+                // results carry no source, so fall back to the browsed source.
+                let source = items
+                    .first()
+                    .map(|i| (i.source_type, i.source_id.clone()))
+                    .or_else(|| self.browsed_source.clone());
+                if let Some((st, source_id)) = source {
+                    let key = SessionContentCache::library_key(st, &source_id, &section_key);
                     self.content_cache.put_library(&key, items);
                 }
             }
@@ -1811,7 +1816,6 @@ impl Component for App {
             }
             AppCmd::LibraryRevalidated {
                 cache_key,
-                section_key,
                 entry_epoch,
                 source_set_epoch,
                 dispatch_seq,
@@ -1850,12 +1854,19 @@ impl Component for App {
                     // Nothing changed: leave the view (and its scroll) untouched.
                     return;
                 }
-                // Store the merged result; apply in place only if this library is
-                // on screen. Clone only when both consumers (cache + view) need it.
-                if self.current_view == CurrentView::Library(section_key.clone()) {
+                // Store the merged result; apply in place only if THIS library
+                // (by full composite key, not bare section key — two servers can
+                // share a section key) is on screen. Clone only when both the
+                // cache and the view need it.
+                let on_screen = matches!(
+                    (&self.current_view, &self.browsed_source),
+                    (CurrentView::Library(sk), Some((bt, bid)))
+                        if SessionContentCache::library_key(*bt, bid, sk) == cache_key
+                );
+                if on_screen {
                     self.content_cache.put_library(&cache_key, merged.clone());
                     self.library_view.emit(LibraryViewMsg::ApplyRevalidated {
-                        section_key,
+                        cache_key,
                         items: merged,
                     });
                 } else {

@@ -125,9 +125,11 @@ pub enum LibraryViewMsg {
     ShowCached(LibrarySection, Vec<MediaItem>),
     /// Apply a background-revalidation result to the displayed library in place
     /// (no skeleton, no loading page; current filter/sort/search preserved).
-    /// App sends this only when the content actually changed.
+    /// App sends this only when the content actually changed. `cache_key` is the
+    /// full composite ({source}:{section}) so a result for one server's section
+    /// can't be applied to another server's same-numbered section.
     ApplyRevalidated {
-        section_key: String,
+        cache_key: String,
         items: Vec<MediaItem>,
     },
     LoadError(String),
@@ -170,8 +172,8 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::ShowCached(section, items) => {
                 write!(f, "ShowCached({}, {} items)", section.title, items.len())
             }
-            Self::ApplyRevalidated { section_key, items } => {
-                write!(f, "ApplyRevalidated({section_key}, {} items)", items.len())
+            Self::ApplyRevalidated { cache_key, items } => {
+                write!(f, "ApplyRevalidated({cache_key}, {} items)", items.len())
             }
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
             Self::SearchChanged(q) => write!(f, "SearchChanged({q:?})"),
@@ -812,12 +814,13 @@ impl Component for LibraryView {
                 self.library_title.set_label(&section.title);
                 self.apply_loaded_items(items, &sender);
             }
-            LibraryViewMsg::ApplyRevalidated { section_key, items } => {
-                // Silent in-place update from background revalidation. Guard that
-                // we're still showing this library (the user may have navigated
-                // away before the refetch returned). Preserve the current
-                // filter/sort/search — only the items and grid refresh.
-                if self.library_key.as_deref() != Some(section_key.as_str()) {
+            LibraryViewMsg::ApplyRevalidated { cache_key, items } => {
+                // Silent in-place update from background revalidation. Guard on the
+                // full composite key (library_id) — not the bare section key — so a
+                // result for another server's same-numbered section is rejected if
+                // the user navigated there. Preserve current filter/sort/search;
+                // only the items and grid refresh.
+                if self.library_id.as_deref() != Some(cache_key.as_str()) {
                     return;
                 }
                 self.all_items = items;
