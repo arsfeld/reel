@@ -11,6 +11,8 @@ pub mod mpris;
 #[allow(dead_code)]
 pub mod plex;
 pub mod screensaver;
+#[allow(dead_code)]
+pub mod session_cache;
 pub mod stream_cache;
 pub mod visibility;
 #[allow(dead_code)]
