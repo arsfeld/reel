@@ -68,8 +68,9 @@ pub enum TranscodeError {
     /// The response body did not deserialize.
     #[error("malformed transcode decision response: {0}")]
     Parse(String),
-    /// The response parsed but carried no recognizable `Part@decision` — fail
-    /// loud rather than defaulting to a kind that would route playback wrong.
+    /// The response parsed but carried neither a recognizable `Part@decision`
+    /// nor a container `generalDecisionCode` we can map — fail loud rather than
+    /// defaulting to a kind that would route playback wrong.
     #[error("transcode decision response had no decision field")]
     NoDecision,
     /// Building the request URL failed.
@@ -255,7 +256,19 @@ impl PlexClient {
         let decision: PlexDecisionResponse = serde_json::from_str(&body)
             .map_err(|e| TranscodeError::Parse(redact_plex_token(&e.to_string())))?;
 
-        self.decision_to_playback(req, &session, decision)
+        let result = self.decision_to_playback(req, &session, decision);
+        if let Err(TranscodeError::NoDecision) = &result {
+            // The response parsed but carried no mappable decision — typically a
+            // server-side reject (e.g. transcodeDecisionCode 4005, "No conversion
+            // profile found"). Log the redacted body so the actual decision codes
+            // are recoverable from logs rather than opaque behind a generic error.
+            tracing::warn!(
+                rating_key = %req.rating_key,
+                body = %redact_plex_token(&body),
+                "transcode decision had no mappable decision; raw body follows"
+            );
+        }
+        result
     }
 
     /// Map a parsed decision response into a [`PlaybackDecision`], building the
@@ -275,17 +288,22 @@ impl PlexClient {
         });
         let part = media.and_then(|m| m.parts.first());
 
-        // The Part decision is authoritative; absence is a loud error (not a
-        // silent default that would route playback wrong).
-        let part_decision = part
-            .and_then(|p| p.decision.as_deref())
-            .ok_or(TranscodeError::NoDecision)?;
-
-        let kind = match part_decision {
-            "directplay" => PlaybackDecisionKind::DirectPlay,
-            "copy" => PlaybackDecisionKind::DirectStream,
-            "transcode" => PlaybackDecisionKind::Transcode,
-            _ => return Err(TranscodeError::NoDecision),
+        // The per-Part decision is authoritative when present. Some Plex server
+        // versions omit it even on a perfectly valid response, in which case the
+        // container-level decision codes carry the verdict: generalDecisionCode
+        // 1000 == "Direct play OK". Fall back to that rather than erroring (which
+        // would force a noisy direct-play fallback for content the server already
+        // cleared for direct play). Anything we still can't classify is a loud
+        // error, not a silent default that would route playback wrong.
+        let kind = match part.and_then(|p| p.decision.as_deref()) {
+            Some("directplay") => PlaybackDecisionKind::DirectPlay,
+            Some("copy") => PlaybackDecisionKind::DirectStream,
+            Some("transcode") => PlaybackDecisionKind::Transcode,
+            Some(_) => return Err(TranscodeError::NoDecision),
+            None => match mc.general_decision_code {
+                Some(1000) => PlaybackDecisionKind::DirectPlay,
+                _ => return Err(TranscodeError::NoDecision),
+            },
         };
 
         // Output res/bitrate come from the selected Media, never the request
@@ -641,8 +659,36 @@ mod tests {
     #[test]
     fn decision_without_decision_field_is_loud_error() {
         let c = PlexClient::new("http://h:32400", "tok");
-        // A decision body with a Part but no `decision` field.
+        // A decision body with a Part but no `decision` field and no container
+        // decision code to fall back on.
         let json = r#"{"MediaContainer":{"Metadata":[{"ratingKey":"1","title":"x","type":"movie",
+            "Media":[{"Part":[{"key":"/p/1"}]}]}]}}"#;
+        let decision: PlexDecisionResponse = serde_json::from_str(json).unwrap();
+        let err = c.decision_to_playback(&req(), "s", decision).unwrap_err();
+        assert!(matches!(err, TranscodeError::NoDecision));
+    }
+
+    #[test]
+    fn missing_part_decision_falls_back_to_general_decision_code() {
+        let c = PlexClient::new("http://h:32400", "tok");
+        // Some Plex server versions omit the per-Part `decision` but set the
+        // container `generalDecisionCode` to 1000 ("Direct play OK").
+        let json = r#"{"MediaContainer":{"generalDecisionCode":1000,
+            "Metadata":[{"ratingKey":"1","title":"x","type":"movie",
+            "Media":[{"Part":[{"key":"/p/1"}]}]}]}}"#;
+        let decision: PlexDecisionResponse = serde_json::from_str(json).unwrap();
+        let pd = c.decision_to_playback(&req(), "s", decision).unwrap();
+        assert!(matches!(pd.kind, PlaybackDecisionKind::DirectPlay));
+        assert!(pd.session.is_none());
+    }
+
+    #[test]
+    fn missing_part_decision_with_conversion_code_is_loud_error() {
+        let c = PlexClient::new("http://h:32400", "tok");
+        // generalDecisionCode 1001 == conversion needed, but with no per-Part
+        // decision we can't tell copy from transcode — stay loud.
+        let json = r#"{"MediaContainer":{"generalDecisionCode":1001,
+            "Metadata":[{"ratingKey":"1","title":"x","type":"movie",
             "Media":[{"Part":[{"key":"/p/1"}]}]}]}}"#;
         let decision: PlexDecisionResponse = serde_json::from_str(json).unwrap();
         let err = c.decision_to_playback(&req(), "s", decision).unwrap_err();
