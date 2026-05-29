@@ -1,116 +1,62 @@
 [package]
 name = "reel"
-version = "0.7.6"
+version = "0.1.0"
 edition = "2024"
 authors = ["Alexandre Rosenfeld <alex@rosenfeld.one>"]
 license = "GPL-3.0-or-later"
-description = "A modern, native media player for the GNOME desktop"
-repository = "https://github.com/arsfeld/reel"
-keywords = ["media", "player", "plex", "jellyfin", "gnome"]
-categories = ["multimedia", "gui"]
-
-[features]
-# Default features are platform-specific:
-# - Linux: Both mpv and gstreamer backends
-# - macOS: Only gstreamer (mpv has OpenGL issues)
-# Note: Use --no-default-features --features gstreamer on macOS
-default = ["mpv", "gstreamer"]
-
-# Media player backends
-mpv = ["dep:libmpv2", "dep:libmpv2-sys"]
-gstreamer = ["dep:gstreamer", "dep:gstreamer-video", "dep:gstreamer-player", "dep:gstreamer-pbutils"]
+description = "A modern, native media player for the Linux desktop"
 
 [dependencies]
-# GTK and UI (required for Relm4)
-gtk4 = { version = "0.10", features = ["v4_14"] }
-gdk4 = { version = "0.10", features = ["v4_14"] }
-gdk-pixbuf = { version = "0.21" }
+# UI
+relm4 = { version = "0.11", features = ["libadwaita"] }
+gtk = { version = "0.11", package = "gtk4", features = ["v4_14"] }
+adw = { version = "0.9", package = "libadwaita", features = ["v1_5"] }
 
-libadwaita = { version = "0.8", features = ["v1_5"] }
+# Video backend (GStreamer)
+gst = { version = "0.25", package = "gstreamer" }
+gst-video = { version = "0.25", package = "gstreamer-video" }
 
-# Relm4
-relm4 = { version = "0.10" }
-relm4-components = { version = "0.10" }
-relm4-icons = { version = "0.10" }
-tracker = { version = "0.2" }
+# HTTP + serialization
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "form", "rustls", "webpki-roots"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
 
-# Media playback - GStreamer (all platforms)
-gstreamer = { version = "0.24", optional = true }
-gstreamer-video = { version = "0.24", optional = true }
-gstreamer-player = { version = "0.24", optional = true }
-gstreamer-pbutils = { version = "0.24", optional = true }
+# Database
+diesel = { version = "2.3.9", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel_migrations = "2.3"
+# Declared directly so the `bundled` feature compiles SQLite from source
+# (diesel doesn't enable bundling itself); no system libsqlite needed.
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 
-# Async runtime
-tokio = { version = "1.47", features = ["full"] }
-tokio-util = { version = "0.7", features = ["rt", "io"] }
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 async-trait = "0.1"
-async-stream = "0.3"
-futures = "0.3"
 
-# HTTP and networking
-axum = "0.8"
-bytes = "1.10"
-reqwest = { version = "0.12", features = ["json", "stream", "cookies", "native-tls"] }
-url = "2.5"
-percent-encoding = "2.3"
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_urlencoded = "0.7"
-toml = "0.9"
-
-# Database and caching
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
-sea-orm = { version = "1.1", features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros", "with-chrono", "with-json", "with-uuid"] }
-sea-orm-migration = { version = "1.1", features = ["runtime-tokio-native-tls", "sqlx-sqlite"] }
-sea-query = "0.32"
-sea-query-binder = { version = "0.7", features = ["sqlx-sqlite"] }
+# Crypto (artwork cache keys)
+sha2 = "0.11"
 
 # Error handling
-anyhow = "1.0"
-thiserror = "2.0"
+thiserror = "2"
 
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Utilities
-once_cell = "1.21"
-chrono = { version = "0.4", features = ["serde"] }
-dirs = "6.0"
+# System
 libc = "0.2"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
-image = "0.25"
-webp = "0.3"
-base64 = "0.22"
-uuid = { version = "1.18", features = ["v4", "serde"] }
-sha2 = "0.10"
-md5 = "0.8"
-lru = "0.16"
-lazy_static = "1.5"
-tantivy = "0.25"
-notify = "8.2"
-sysinfo = "0.35"
-self_update = { version = "0.41", features = ["archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
-
-# Localization
-gettext-rs = { version = "0.7", features = ["gettext-system"] }
-
-# Platform-specific media playback dependencies
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-libmpv2 = { version = "5.0", optional = true }
-libmpv2-sys = { version = "4.0", optional = true }
+futures = "0.3.32"
+mpris-server = "0.10"
 
 [dev-dependencies]
-mockito = "1.7"
-tempfile = "3.23"
-criterion = "0.7"
-tower = "0.5"
-testcontainers = "0.23"
+axum = "0.8"
+mockall = "0.14"
+tempfile = "3"
+tokio = { version = "1", features = ["net"] }
+wiremock = "0.6"
 
-[build-dependencies]
-glib-build-tools = { version = "0.21" }
+[features]
+integration = []
 
 [profile.release]
 lto = true
@@ -122,69 +68,5 @@ strip = true
 opt-level = 0
 debug = true
 
-# Lint configuration - treat warnings as errors
 [lints.rust]
 warnings = "deny"
-
-# Debian package configuration for cargo-deb
-[package.metadata.deb]
-maintainer = "Alexandre Rosenfeld <alex@rosenfeld.one>"
-copyright = "2025, Alexandre Rosenfeld <alex@rosenfeld.one>"
-license-file = ["LICENSE", "0"]
-extended-description = """\
-Reel is a modern, offline-first media player for the GNOME desktop that provides \
-a premium media consumption experience with support for multiple backends including \
-Plex, Jellyfin, and local files. Features include hardware-accelerated playback, \
-seamless background synchronization, and a beautiful GTK4/libadwaita interface."""
-depends = "$auto, libgtk-4-1 (>= 4.6), libadwaita-1-0 (>= 1.0), gstreamer1.0-plugins-base (>= 1.0), gstreamer1.0-plugins-good (>= 1.0), gstreamer1.0-plugins-bad (>= 1.0), gstreamer1.0-plugins-ugly (>= 1.0), gstreamer1.0-libav (>= 1.0), libmpv1 | libmpv2"
-section = "video"
-priority = "optional"
-assets = [
-    ["target/release/reel", "usr/bin/", "755"],
-    ["data/dev.arsfeld.Reel.desktop", "usr/share/applications/", "644"],
-    ["data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
-    ["README.md", "usr/share/doc/reel/README", "644"],
-]
-
-# RPM package configuration for cargo-generate-rpm
-[package.metadata.generate-rpm]
-assets = [
-    { source = "target/release/reel", dest = "/usr/bin/reel", mode = "755" },
-    { source = "data/dev.arsfeld.Reel.desktop", dest = "/usr/share/applications/dev.arsfeld.Reel.desktop", mode = "644" },
-    { source = "data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg", dest = "/usr/share/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg", mode = "644" },
-    { source = "README.md", dest = "/usr/share/doc/reel/README.md", mode = "644", doc = true },
-]
-auto-req = "disabled"  # We'll specify requirements manually
-requires = { gtk4 = "*", libadwaita = "*", gstreamer1 = "*", gstreamer1-plugins-base = "*", gstreamer1-plugins-good = "*", gstreamer1-plugins-bad-free = "*", gstreamer1-plugins-ugly-free = "*", gstreamer1-libav = "*", mpv-libs = "*" }
-
-# macOS bundle configuration for cargo-bundle
-[package.metadata.bundle]
-name = "Reel"
-identifier = "dev.arsfeld.Reel"
-icon = ["data/macos/icon.icns"]
-category = "public.app-category.video"
-short_description = "A modern, native media player for the GNOME desktop"
-long_description = """
-Reel brings your Plex and Jellyfin libraries to the desktop with a premium, Netflix-like experience.
-
-Features:
-• Multi-platform support with native look and feel
-• Simultaneous connections to multiple media servers
-• Offline-first architecture with instant UI loading
-• Hardware-accelerated video playback via MPV
-• Background synchronization without blocking UI
-• Beautiful GTK4/libadwaita interface
-"""
-copyright = "Copyright © 2025 Alexandre Rosenfeld"
-osx_frameworks = [
-    "CoreFoundation",
-    "CoreGraphics",
-    "CoreVideo",
-    "IOKit",
-    "Metal",
-    "Security"
-]
-osx_url_schemes = ["reel"]
-resources = [
-    "data/macos/"
-]

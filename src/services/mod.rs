@@ -1,8 +1,20 @@
-pub mod cache_service;
-pub mod config_service;
-pub mod conflict_resolver;
-pub mod initialization;
-
-// Relm4 architecture modules
-pub mod commands;
-pub mod core;
+#[allow(dead_code)]
+pub mod artwork;
+pub mod download;
+#[allow(dead_code)]
+pub mod jellyfin;
+#[allow(dead_code)]
+pub mod library_filter;
+#[allow(dead_code)]
+pub mod media_source;
+pub mod mpris;
+#[allow(dead_code)]
+pub mod plex;
+pub mod screensaver;
+#[allow(dead_code)]
+pub mod session_cache;
+pub mod stream_cache;
+pub mod visibility;
+#[allow(dead_code)]
+pub mod watch_state;
+pub mod window_state;

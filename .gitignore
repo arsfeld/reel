@@ -1,44 +1,15 @@
-# Rust
-/target/
-**/*.rs.bk
+/target
+result
+.direnv/
+.reasonix/
 
-# Nix
-.direnv
+# Local planning artifacts (not for the repo)
+docs/plans/
+docs/brainstorms/
 
-# Flatpak
-build-dir/
+# flatpak local build artifacts
+/build/
+/repo/
 .flatpak-builder/
-cargo-sources.json
-gst-plugin-gtk4-sources.json
-flatpak-cargo-generator.py
 *.flatpak
-repo/
-.gst-plugins-rs/
-
-# MacOS
-Generated/
-
-# IDE
-.vscode/
-.idea/
-.code/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Build artifacts
-*.gresource
-build/
-
-# AppImage build
-AppDir/
-*.AppImage
-squashfs-root/
-appimagetool-*.AppImage
-
-# Cache and config
-data/cache/
-data/config/
+.worktrees

@@ -1,101 +1,57 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>dev.arsfeld.Reel</id>
-  
-  <name>Reel</name>
-  <summary>A modern media player for GNOME</summary>
-  
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  
+  <name>Reel</name>
+  <summary>A modern, native media player for the Linux desktop</summary>
+
+  <developer id="dev.arsfeld">
+    <name>Alexandre Rosenfeld</name>
+  </developer>
+
   <description>
     <p>
-      Reel is a native Linux media player that brings your Plex and Jellyfin libraries to the GNOME desktop. 
-      Built with Rust and GTK4, it delivers a fast, reliable media experience without the overhead of web technologies.
+      Reel is a beautiful media player for the Linux desktop with Plex
+      integration, automatic metadata, and universal format support
+      powered by mpv.
     </p>
-    <p>Features:</p>
+    <p>Features include:</p>
     <ul>
-      <li>Native GTK4/libadwaita interface that integrates seamlessly with GNOME</li>
-      <li>Support for multiple media backends (Plex, with Jellyfin planned)</li>
-      <li>Offline-first design with SQLite caching</li>
-      <li>Hardware-accelerated video playback via GStreamer</li>
-      <li>Fast and memory-safe, written entirely in Rust</li>
-      <li>Background synchronization that doesn't block the UI</li>
+      <li>Hardware-accelerated video playback via mpv</li>
+      <li>Plex media server integration with OAuth</li>
+      <li>Beautiful library browsing with poster art</li>
+      <li>Resume playback from where you left off</li>
+      <li>MPRIS desktop media controls</li>
     </ul>
   </description>
-  
+
   <launchable type="desktop-id">dev.arsfeld.Reel.desktop</launchable>
-  
-  <screenshots>
-    <screenshot type="default">
-      <caption>Main window showing media library</caption>
-      <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/main-window.png</image>
-    </screenshot>
-    <screenshot>
-      <caption>TV show details with episode list</caption>
-      <image>https://raw.githubusercontent.com/arsfeld/reel/main/screenshots/show-details.png</image>
-    </screenshot>
-  </screenshots>
-  
+
   <url type="homepage">https://github.com/arsfeld/reel</url>
   <url type="bugtracker">https://github.com/arsfeld/reel/issues</url>
-  <url type="vcs-browser">https://github.com/arsfeld/reel</url>
-  
-  <developer id="dev.arsfeld">
-    <name>arsfeld</name>
-  </developer>
-  
-  <provides>
-    <binary>reel</binary>
-  </provides>
-  
+
+  <content_rating type="oars-1.1" />
+
   <requires>
-    <display_length compare="ge">360</display_length>
-  </requires>
-  
-  <recommends>
     <control>keyboard</control>
     <control>pointing</control>
-    <control>touch</control>
-  </recommends>
-  
-  <content_rating type="oars-1.1">
-    <content_attribute id="social-info">mild</content_attribute>
-  </content_rating>
-  
+  </requires>
+
+  <provides>
+    <binary>reel</binary>
+    <mediatype>video/mp4</mediatype>
+    <mediatype>video/x-matroska</mediatype>
+    <mediatype>video/webm</mediatype>
+    <mediatype>video/mpeg</mediatype>
+    <mediatype>video/quicktime</mediatype>
+  </provides>
+
   <releases>
-    <release version="0.7.5" date="2025-10-06">
+    <release version="0.1.0" date="2026-03-14">
       <description>
-        <p>Latest stable release with enhanced features and reliability:</p>
-        <ul>
-          <li>Improved Plex and Jellyfin backend support</li>
-          <li>Enhanced offline-first architecture with SQLite caching</li>
-          <li>Dual playback engine support (MPV and GStreamer)</li>
-          <li>Better synchronization and connection monitoring</li>
-          <li>UI refinements and bug fixes</li>
-          <li>Improved error handling and stability</li>
-        </ul>
-      </description>
-    </release>
-    <release version="0.1.0" date="2025-08-20">
-      <description>
-        <p>First major release with comprehensive Plex support:</p>
-        <ul>
-          <li>Full Plex integration with OAuth authentication</li>
-          <li>Cinematic UI with backdrop images and metadata</li>
-          <li>Hardware-accelerated GStreamer video playback</li>
-          <li>Watch status tracking and progress indicators</li>
-          <li>Continue Watching and Recently Added sections</li>
-          <li>Multi-level image caching with HTTP/2 optimization</li>
-          <li>Instant startup with SQLite offline cache</li>
-          <li>Library filtering and sorting capabilities</li>
-        </ul>
+        <p>Initial release with Plex integration and mpv playback.</p>
       </description>
     </release>
   </releases>
-  
-  <kudos>
-    <kudo>HiDpiIcon</kudo>
-    <kudo>ModernToolkit</kudo>
-  </kudos>
 </component>
