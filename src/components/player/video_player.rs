@@ -1488,6 +1488,9 @@ impl VideoPlayer {
             self.playback.autoplay,
             self.preferred_subtitle_lang.clone(),
             local_path_ref,
+            // The color-convert stage is only needed for direct-play (10-bit
+            // source frames); a transcode outputs SDR h264 that renders natively.
+            !is_transcode,
             on_bus,
         ) else {
             widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);

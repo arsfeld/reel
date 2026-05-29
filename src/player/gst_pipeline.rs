@@ -42,6 +42,7 @@ impl PlaybackPipeline {
         autoplay: bool,
         preferred_subtitle_lang: Option<String>,
         local_path: Option<&str>,
+        install_color_convert: bool,
         sender: Rc<dyn Fn(PipelineBusMsg)>,
     ) -> Option<Self> {
         let playbin = make_element("playbin3")?;
@@ -58,9 +59,16 @@ impl PlaybackPipeline {
         // BT.2020 frames fail to negotiate to gtk4paintablesink and play as a
         // black video area. `video-filter` composes inside playbin3 ahead of the
         // sink — unlike wrapping the sink in a bin, which panics on 1.26+ (see
-        // the note above). If the GL elements are unavailable we install nothing
-        // and 10-bit direct-play is simply not advertised by the capability gate.
-        if let Some(filter) = crate::player::capabilities::build_color_convert_filter() {
+        // the note above).
+        //
+        // Only for direct-play: a server transcode already outputs SDR h264 that
+        // renders natively, so the convert stage is unnecessary there — and
+        // inserting it into the HLS/adaptivedemux path is a needless risk. If the
+        // GL elements are unavailable we install nothing and 10-bit direct-play
+        // is simply not advertised by the capability gate.
+        if install_color_convert
+            && let Some(filter) = crate::player::capabilities::build_color_convert_filter()
+        {
             playbin.set_property("video-filter", &filter);
         }
 
