@@ -12,7 +12,7 @@ use crate::models::{
     playback::{PlaybackDecision, PlaybackRequest},
 };
 use crate::player::SkipMarkers;
-use crate::services::media_source::{MediaSource, SourceError};
+use crate::services::media_source::{DownloadDescriptor, MediaSource, SourceError};
 
 use super::api::JellyfinClient;
 use super::convert;
@@ -171,6 +171,24 @@ impl MediaSource for JellyfinSource {
             None => (part_key, part_key),
         };
         self.client.stream_url(item_id, media_source_id)
+    }
+
+    fn download_descriptor(&self, item: &MediaItem) -> Result<DownloadDescriptor, SourceError> {
+        // `file_path` is the composite "{item_id}|{media_source_id}" built in
+        // convert.rs. The URL is rebuilt from it via playback_url on each resume
+        // (stream?static=true is byte-rangeable), so only the part key persists.
+        let part_key = item
+            .file_path
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| {
+                SourceError::NotFound(format!("No downloadable file for item {}", item.id))
+            })?;
+        Ok(DownloadDescriptor {
+            url: self.playback_url(part_key),
+            part_key: part_key.to_string(),
+            expected_size: None,
+        })
     }
 
     async fn resolve_playback(
@@ -535,6 +553,34 @@ mod tests {
             .await;
         let src = wm_source(&server.uri());
         assert!(src.stop_transcode("ps-gone").await.is_ok());
+    }
+
+    #[test]
+    fn download_descriptor_builds_static_url_from_composite_key() {
+        let src = wm_source("http://h:8096");
+        let dto: super::super::models::BaseItemDto = serde_json::from_str(
+            r#"{"Id":"item9","Type":"Movie","Name":"M","MediaSources":[{"Id":"src1"}]}"#,
+        )
+        .unwrap();
+        let item = convert::base_item_to_media_item(&dto, "http://h:8096").unwrap();
+        let desc = src.download_descriptor(&item).unwrap();
+        assert_eq!(desc.part_key, "item9|src1");
+        assert!(desc.url.contains("/Videos/item9/stream?static=true"));
+        assert!(desc.url.contains("mediaSourceId=src1"));
+        assert!(desc.expected_size.is_none());
+    }
+
+    #[test]
+    fn download_descriptor_errors_when_no_file_path() {
+        // A Series with no media source has no downloadable file (file_path None).
+        let src = wm_source("http://h:8096");
+        let dto: super::super::models::BaseItemDto =
+            serde_json::from_str(r#"{"Id":"series1","Type":"Series","Name":"S"}"#).unwrap();
+        let item = convert::base_item_to_media_item(&dto, "http://h:8096").unwrap();
+        assert!(matches!(
+            src.download_descriptor(&item),
+            Err(SourceError::NotFound(_))
+        ));
     }
 
     #[tokio::test]
