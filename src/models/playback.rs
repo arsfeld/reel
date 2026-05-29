@@ -125,16 +125,26 @@ impl PlaybackDecisionKind {
     }
 }
 
-/// Redact the `X-Plex-Token` value in a URL or arbitrary string so it never
-/// reaches logs, `Debug` output, or error dialogs. Replaces the token value
-/// with `REDACTED` while leaving the rest intact.
+/// Redact secret token values in a URL or arbitrary string so they never reach
+/// logs, `Debug` output, or error dialogs. Covers Plex's `X-Plex-Token=` and
+/// Jellyfin's `api_key=` / `ApiKey=` query parameters, replacing each value with
+/// `REDACTED` while leaving the rest intact.
 pub fn redact_plex_token(s: &str) -> String {
-    // Match `X-Plex-Token=<value>` up to the next `&`, whitespace, or end.
-    let needle = "X-Plex-Token=";
+    // Token query-param names to redact. Each match runs to the next `&`,
+    // whitespace, or end of string.
+    const NEEDLES: &[&str] = &["X-Plex-Token=", "api_key=", "ApiKey="];
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
-    while let Some(pos) = rest.find(needle) {
-        let (before, after) = rest.split_at(pos + needle.len());
+    loop {
+        // Redact at the earliest occurrence of any token param.
+        let Some((pos, needle_len)) = NEEDLES
+            .iter()
+            .filter_map(|n| rest.find(n).map(|pos| (pos, n.len())))
+            .min_by_key(|(pos, _)| *pos)
+        else {
+            break;
+        };
+        let (before, after) = rest.split_at(pos + needle_len);
         out.push_str(before);
         out.push_str("REDACTED");
         // Skip the token value: everything until the next delimiter.
@@ -343,6 +353,49 @@ mod tests {
     fn redact_plex_token_at_end_of_string() {
         let masked = redact_plex_token("https://h/x?X-Plex-Token=abc");
         assert_eq!(masked, "https://h/x?X-Plex-Token=REDACTED");
+    }
+
+    #[test]
+    fn redact_masks_jellyfin_api_key_direct_play() {
+        let masked =
+            redact_plex_token("https://h/Videos/x/stream?static=true&mediaSourceId=s&api_key=jfsecret");
+        assert!(!masked.contains("jfsecret"));
+        assert!(masked.contains("api_key=REDACTED"));
+        assert!(masked.contains("mediaSourceId=s"));
+    }
+
+    #[test]
+    fn redact_masks_jellyfin_api_key_in_transcode_url() {
+        let masked =
+            redact_plex_token("https://h/videos/x/master.m3u8?api_key=jfsecret&mediaSourceId=s");
+        assert!(!masked.contains("jfsecret"));
+        assert!(masked.contains("api_key=REDACTED"));
+        assert!(masked.contains("mediaSourceId=s"));
+    }
+
+    #[test]
+    fn redact_masks_capitalized_apikey() {
+        let masked = redact_plex_token("https://h/Items/x/Images/Primary?tag=t&ApiKey=jfsecret");
+        assert!(!masked.contains("jfsecret"));
+        assert!(masked.contains("ApiKey=REDACTED"));
+        assert!(masked.contains("tag=t"));
+    }
+
+    #[test]
+    fn playback_decision_debug_redacts_jellyfin_api_key() {
+        let d = PlaybackDecision {
+            kind: PlaybackDecisionKind::Transcode,
+            url: "https://h/videos/x/master.m3u8?api_key=jfsecret".into(),
+            session: Some("ps".into()),
+            video_resolution: Some("1080".into()),
+            video_bitrate_kbps: Some(8000),
+            throttled: false,
+            audio_streams: vec![],
+            subtitle_streams: vec![],
+        };
+        let dbg = format!("{d:?}");
+        assert!(!dbg.contains("jfsecret"));
+        assert!(dbg.contains("api_key=REDACTED"));
     }
 
     fn decision(

@@ -327,7 +327,10 @@ pub fn handle_play_media(
     sender: &ComponentSender<App>,
     root: &adw::ApplicationWindow,
 ) {
-    info!("Playing media: {}...", &url[..url.len().min(80)]);
+    // Redact before slicing — a short host can place the token value within the
+    // first 80 chars, so slicing the raw URL would leak it (U6/KTD8).
+    let log_url = crate::models::playback::redact_plex_token(&url);
+    info!("Playing media: {}...", &log_url[..log_url.len().min(80)]);
     // Resume where playback left off. For a downloaded item watched offline, an
     // unsynced offline position wins over the source's (stale) offset — the one
     // sanctioned inversion of "Plex is authoritative". Otherwise the source
