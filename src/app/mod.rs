@@ -34,6 +34,7 @@ use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 use crate::services::mpris::{self, MprisBridge, MprisCommand};
 use crate::services::screensaver::ScreensaverInhibitor;
+use crate::services::session_cache::SessionContentCache;
 use crate::services::watch_state::WatchStateTracker;
 use crate::settings::Settings;
 
@@ -152,6 +153,9 @@ pub struct App {
     /// startup). Gates whether 10-bit SDR direct-play is advertised to the
     /// server; `false` keeps everything 10-bit on the transcode path.
     can_render_10bit: bool,
+    /// Session-scoped content cache for library + Home views, so navigating back
+    /// to a previously-opened view renders instantly instead of re-fetching.
+    content_cache: SessionContentCache,
 }
 
 impl App {
@@ -431,6 +435,12 @@ pub enum AppMsg {
         source_type: String,
         source_id: String,
     },
+    /// Store freshly-fetched library items in the session content cache,
+    /// composing the cache key from the browsed source + the section key.
+    CacheLibraryItems {
+        section_key: String,
+        items: Vec<MediaItem>,
+    },
     /// Persist a library/Collections visibility change (composite key + visible).
     SetLibraryVisible {
         key: String,
@@ -705,6 +715,9 @@ impl Component for App {
                     AppMsg::SaveLibraryUiState { library_id, state }
                 }
                 LibraryViewOutput::DensityChanged(d) => AppMsg::SetGridDensity(d),
+                LibraryViewOutput::ItemsFetched { section_key, items } => {
+                    AppMsg::CacheLibraryItems { section_key, items }
+                }
             },
         );
 
@@ -878,6 +891,7 @@ impl Component for App {
             current_audio_stream_id: None,
             current_subtitle_stream_id: None,
             can_render_10bit,
+            content_cache: SessionContentCache::new(),
         };
 
         // Reconcile downloads against disk and rebuild the queue (no transfers
@@ -959,14 +973,32 @@ impl Component for App {
                 // Point the browsed source at the navigated library's owner and
                 // feed that source to the LibraryView list (per-item paths still
                 // resolve their own source).
-                if let Some(st) = SourceType::from_str(&source_type) {
+                let parsed = SourceType::from_str(&source_type);
+                if let Some(st) = parsed {
                     self.browsed_source = Some((st, source_id.clone()));
                     if let Some(src) = self.sources.get(st, &source_id) {
                         self.library_view
                             .emit(LibraryViewMsg::SetSource(src, self.artwork_cache.clone()));
                     }
                 }
-                self.library_view.emit(LibraryViewMsg::LoadLibrary(section));
+                // Session-cache hit → render instantly without a fetch; miss → load.
+                let cached = parsed.and_then(|st| {
+                    let key = SessionContentCache::library_key(st, &source_id, &section.key);
+                    self.content_cache.get_library(&key).map(<[_]>::to_vec)
+                });
+                match cached {
+                    Some(items) => self
+                        .library_view
+                        .emit(LibraryViewMsg::ShowCached(section, items)),
+                    None => self.library_view.emit(LibraryViewMsg::LoadLibrary(section)),
+                }
+            }
+            AppMsg::CacheLibraryItems { section_key, items } => {
+                // Store the just-fetched items so a later revisit renders instantly.
+                if let Some((st, source_id)) = &self.browsed_source {
+                    let key = SessionContentCache::library_key(*st, source_id, &section_key);
+                    self.content_cache.put_library(&key, items);
+                }
             }
             AppMsg::SetLibraryVisible { key, visible } => {
                 // `key` is the composite visibility key built by the sidebar.

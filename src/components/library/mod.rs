@@ -120,6 +120,9 @@ pub enum LibraryViewMsg {
     SetSavedUiState(LibrarySettings),
     ItemActivated(u32),
     LibraryLoaded(Vec<MediaItem>),
+    /// Render a library instantly from session-cached items (no skeleton, no
+    /// fetch). Emitted by App on a content-cache hit.
+    ShowCached(LibrarySection, Vec<MediaItem>),
     LoadError(String),
     // Search/filter/sort messages
     SearchChanged(String),
@@ -157,6 +160,9 @@ impl std::fmt::Debug for LibraryViewMsg {
             Self::SetSavedUiState(..) => write!(f, "SetSavedUiState(..)"),
             Self::ItemActivated(pos) => write!(f, "ItemActivated({pos})"),
             Self::LibraryLoaded(items) => write!(f, "LibraryLoaded({} items)", items.len()),
+            Self::ShowCached(section, items) => {
+                write!(f, "ShowCached({}, {} items)", section.title, items.len())
+            }
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
             Self::SearchChanged(q) => write!(f, "SearchChanged({q:?})"),
             Self::FilterStateChanged(_) => write!(f, "FilterStateChanged(..)"),
@@ -191,6 +197,13 @@ pub enum LibraryViewOutput {
     },
     /// The poster density changed; other grids (e.g. Downloads) follow it.
     DensityChanged(GridDensity),
+    /// A network fetch for `section_key` completed; App stores the items in the
+    /// session content cache. Carries the section key (not the composite) — App
+    /// composes the full cache key from its browsed source.
+    ItemsFetched {
+        section_key: String,
+        items: Vec<MediaItem>,
+    },
 }
 
 pub enum LibraryViewCmd {
@@ -766,60 +779,28 @@ impl Component for LibraryView {
                 }
             }
             LibraryViewMsg::LibraryLoaded(items) => {
-                self.loading_in_progress = false;
-                if items.is_empty() {
-                    self.all_items.clear();
-                    self.grid.clear();
-                    // A connected, visible library that happens to have no items
-                    // — distinct from the "no source" empty state above.
-                    self.empty_page.set_title("Empty Library");
-                    self.empty_page
-                        .set_description(Some("This library has no items yet."));
-                    self.stack.set_visible_child(&self.empty_page);
-                    return;
-                }
-
-                let build_start = std::time::Instant::now();
-                self.all_items = items;
-                self.recompute_watch_data();
-                info!("Library loaded: {} items", self.all_items.len());
-
-                // Compute the persistence key for this library and restore any
-                // saved filter/sort state, reconciled against the loaded items
-                // so stale values (e.g. a genre no longer present) are dropped.
-                //
-                // The key is section-based going forward so two same-type
-                // libraries don't share state. When no section-keyed entry
-                // exists yet, fall back to the legacy library-type key so
-                // existing prefs seed the first load instead of being wiped.
-                let source_type = self.all_items[0].source_type.as_str();
-                let source_id = self.all_items[0].source_id.clone();
+                // Hand the freshly-fetched items to App for session caching, then
+                // render them. The section key lets App compose the cache key.
                 let section_key = self.library_key.clone().unwrap_or_default();
-                let lib_id = format!("{source_type}:{source_id}:{section_key}");
-                let saved = if self.saved_ui.per_library.contains_key(&lib_id) {
-                    self.saved_ui.get(&lib_id)
-                } else {
-                    let legacy_id =
-                        format!("{source_type}:{source_id}:{}", self.library_type.as_str());
-                    self.saved_ui.get(&legacy_id)
-                };
-                self.library_id = Some(lib_id);
-                self.filter_state = library_filter::reconcile(&saved.filters, &self.all_items);
-                self.sort_order = saved.sort;
-                if let Some(idx) = SortOrder::all().iter().position(|s| *s == self.sort_order) {
-                    // Block the change handler so restoring the selection
-                    // doesn't re-emit SortChanged and re-persist on load.
-                    self.sort_dropdown.block_signal(&self.sort_handler);
-                    self.sort_dropdown.set_selected(idx as u32);
-                    self.sort_dropdown.unblock_signal(&self.sort_handler);
+                let _ = sender.output(LibraryViewOutput::ItemsFetched {
+                    section_key,
+                    items: items.clone(),
+                });
+                self.apply_loaded_items(items, &sender);
+            }
+            LibraryViewMsg::ShowCached(section, items) => {
+                // Instant render from the session content cache: no skeleton, no
+                // fetch, no re-cache (App already holds these items).
+                if self.library_key.as_deref() != Some(section.key.as_str()) {
+                    self.filter_state.clear();
+                    self.search_query.clear();
+                    self.search_bar.set_search_mode(false);
+                    self.search_entry.set_text("");
                 }
-
-                self.filter_popover
-                    .reset(&self.all_items, &self.filter_state);
-                self.active_filters_bar.update(&self.filter_state);
-                self.update_clear_button_visibility();
-                self.rebuild_grid(&sender);
-                info!("Full UI build: {:?}", build_start.elapsed());
+                self.library_type = section.library_type;
+                self.library_key = Some(section.key.clone());
+                self.library_title.set_label(&section.title);
+                self.apply_loaded_items(items, &sender);
             }
             LibraryViewMsg::LoadError(msg) => {
                 self.loading_in_progress = false;
@@ -1155,6 +1136,62 @@ impl LibraryView {
     fn recompute_watch_data(&mut self) {
         self.watch_data =
             library_filter::build_effective_watch_map(&self.all_items, &self.local_watch_data);
+    }
+
+    /// Render a loaded set of items: store them, recompute watch state, restore
+    /// persisted filter/sort, and rebuild the grid. Shared by a completed network
+    /// fetch (`LibraryLoaded`) and an instant cache render (`ShowCached`).
+    fn apply_loaded_items(&mut self, items: Vec<MediaItem>, sender: &ComponentSender<Self>) {
+        self.loading_in_progress = false;
+        if items.is_empty() {
+            self.all_items.clear();
+            self.grid.clear();
+            // A connected, visible library that happens to have no items
+            // — distinct from the "no source" empty state.
+            self.empty_page.set_title("Empty Library");
+            self.empty_page
+                .set_description(Some("This library has no items yet."));
+            self.stack.set_visible_child(&self.empty_page);
+            return;
+        }
+
+        let build_start = std::time::Instant::now();
+        self.all_items = items;
+        self.recompute_watch_data();
+        info!("Library loaded: {} items", self.all_items.len());
+
+        // Compute the persistence key for this library and restore any saved
+        // filter/sort state, reconciled against the loaded items so stale values
+        // (e.g. a genre no longer present) are dropped. The key is section-based
+        // so two same-type libraries don't share state; fall back to the legacy
+        // library-type key so existing prefs seed the first load.
+        let source_type = self.all_items[0].source_type.as_str();
+        let source_id = self.all_items[0].source_id.clone();
+        let section_key = self.library_key.clone().unwrap_or_default();
+        let lib_id = format!("{source_type}:{source_id}:{section_key}");
+        let saved = if self.saved_ui.per_library.contains_key(&lib_id) {
+            self.saved_ui.get(&lib_id)
+        } else {
+            let legacy_id = format!("{source_type}:{source_id}:{}", self.library_type.as_str());
+            self.saved_ui.get(&legacy_id)
+        };
+        self.library_id = Some(lib_id);
+        self.filter_state = library_filter::reconcile(&saved.filters, &self.all_items);
+        self.sort_order = saved.sort;
+        if let Some(idx) = SortOrder::all().iter().position(|s| *s == self.sort_order) {
+            // Block the change handler so restoring the selection doesn't
+            // re-emit SortChanged and re-persist on load.
+            self.sort_dropdown.block_signal(&self.sort_handler);
+            self.sort_dropdown.set_selected(idx as u32);
+            self.sort_dropdown.unblock_signal(&self.sort_handler);
+        }
+
+        self.filter_popover
+            .reset(&self.all_items, &self.filter_state);
+        self.active_filters_bar.update(&self.filter_state);
+        self.update_clear_button_visibility();
+        self.rebuild_grid(sender);
+        info!("Full UI build: {:?}", build_start.elapsed());
     }
 
     /// Apply watch + downloaded indicators to a card from current state.
