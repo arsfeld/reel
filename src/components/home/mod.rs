@@ -9,7 +9,8 @@ use crate::models::hub::MediaHub;
 use crate::models::media::{MediaItem, SourceType};
 use crate::models::watch::WatchProgress;
 use crate::services::artwork::ArtworkCache;
-use crate::services::media_source::MediaSource;
+use crate::services::media_source::{MediaSource, SourceError};
+use crate::services::session_cache::CachedHome;
 
 mod hero;
 mod shelf;
@@ -83,6 +84,9 @@ pub enum HomeViewMsg {
     LoadHome {
         in_progress: Vec<(MediaItem, WatchProgress)>,
     },
+    /// Render Home instantly from a session-cached payload (no fetch, no loading
+    /// page). Emitted by App on a Home content-cache hit.
+    ShowCached(Box<CachedHome>),
     LoadError(String),
     /// A card was activated. `resume` is set for Continue Watching cards, which
     /// resume playback rather than opening a detail page.
@@ -108,6 +112,7 @@ impl std::fmt::Debug for HomeViewMsg {
             Self::LoadHome { in_progress } => {
                 write!(f, "LoadHome({} in progress)", in_progress.len())
             }
+            Self::ShowCached(_) => write!(f, "ShowCached(..)"),
             Self::LoadError(msg) => write!(f, "LoadError({msg})"),
             Self::CardActivated { item, resume } => {
                 write!(f, "CardActivated({}, resume={resume})", item.title)
@@ -118,6 +123,14 @@ impl std::fmt::Debug for HomeViewMsg {
             Self::HeroInfo => write!(f, "HeroInfo"),
         }
     }
+}
+
+/// Whether a fetch result is a real failure (vs a genuine empty). A
+/// `NotSupported` source/endpoint legitimately offers no row and counts as
+/// empty-success, so it must not mark a Home load incomplete. Any other error is
+/// a real failure that should skip caching the partial Home.
+pub(crate) fn is_real_source_error<T>(r: &Result<T, SourceError>) -> bool {
+    matches!(r, Err(e) if !matches!(e, SourceError::NotSupported(_)))
 }
 
 /// Merge per-source Continue Watching lists into one badged list. Dedupe by the
@@ -158,9 +171,16 @@ pub fn retain_visible_merged(
 #[allow(dead_code)]
 pub enum HomeViewOutput {
     ShowDetail(MediaItem),
-    PlayMedia { url: String, media_item: MediaItem },
+    PlayMedia {
+        url: String,
+        media_item: MediaItem,
+    },
     ShowConnectionDialog,
     Error(String),
+    /// A complete Home load finished assembling; App stores it in the session
+    /// content cache keyed by the current source set. Only emitted when every
+    /// source contributed without error, so a partial Home is never cached.
+    HomeAssembled(Box<CachedHome>),
 }
 
 #[derive(Debug)]
@@ -176,6 +196,10 @@ pub enum HomeViewCmd {
         /// Server-curated hubs (Recommended / Because-you-watched / genres),
         /// in server order. Empty for non-Plex sources.
         hubs: Vec<MediaHub>,
+        /// True when every per-source fetch in this load succeeded (no errors,
+        /// only genuine empties). A partial load is rendered but not cached, so a
+        /// transient source failure never freezes an incomplete Home on revisit.
+        complete: bool,
     },
     PosterLoaded {
         generation: Generation,
@@ -399,12 +423,24 @@ impl Component for HomeView {
                         // Fan out over every server-CW source, badge each list
                         // with its source label, then merge into one row. Errors
                         // or empty lists simply contribute nothing.
-                        let cw_futures = cw_sources.into_iter().map(|(label, s)| async move {
-                            let items = s.continue_watching().await.unwrap_or_default();
-                            (label, items)
-                        });
-                        let per_source: Vec<(String, Vec<MediaItem>)> =
+                        // `complete` tracks whether every fetch returned without a
+                        // real error. NotSupported (a source/endpoint that simply
+                        // doesn't offer a row) counts as a genuine empty, not a
+                        // failure, so it does not block caching.
+                        let mut complete = true;
+
+                        let cw_futures = cw_sources
+                            .into_iter()
+                            .map(|(label, s)| async move { (label, s.continue_watching().await) });
+                        let cw_results: Vec<(String, Result<Vec<MediaItem>, SourceError>)> =
                             futures::future::join_all(cw_futures).await;
+                        let per_source: Vec<(String, Vec<MediaItem>)> = cw_results
+                            .into_iter()
+                            .map(|(label, r)| {
+                                complete &= !is_real_source_error(&r);
+                                (label, r.unwrap_or_default())
+                            })
+                            .collect();
                         let continue_watching = merge_continue_watching(per_source);
 
                         let libs = match src.libraries().await {
@@ -417,50 +453,72 @@ impl Component for HomeView {
                             let src = src.clone();
                             let key = lib.key.clone();
                             let title = lib.title.clone();
-                            async move {
-                                let mut items = src
-                                    .recently_added_in_library(&key)
-                                    .await
-                                    .unwrap_or_default();
-                                items.truncate(20);
-                                (title, items)
-                            }
+                            async move { (title, src.recently_added_in_library(&key).await) }
                         });
-                        let recently_added: Vec<(String, Vec<MediaItem>)> =
-                            futures::future::join_all(ra_futures)
-                                .await
-                                .into_iter()
-                                .filter(|(_, items)| !items.is_empty())
-                                .collect();
+                        let mut recently_added: Vec<(String, Vec<MediaItem>)> = Vec::new();
+                        for (title, r) in futures::future::join_all(ra_futures).await {
+                            complete &= !is_real_source_error(&r);
+                            let mut items = r.unwrap_or_default();
+                            items.truncate(20);
+                            if !items.is_empty() {
+                                recently_added.push((title, items));
+                            }
+                        }
 
                         // Collections across all libraries.
                         let col_futures = libs.iter().map(|lib| {
                             let src = src.clone();
                             let key = lib.key.clone();
-                            async move { src.collections(&key).await.unwrap_or_default() }
+                            async move { src.collections(&key).await }
                         });
-                        let collections: Vec<MediaItem> = futures::future::join_all(col_futures)
-                            .await
-                            .into_iter()
-                            .flatten()
-                            .collect();
+                        let mut collections: Vec<MediaItem> = Vec::new();
+                        for r in futures::future::join_all(col_futures).await {
+                            complete &= !is_real_source_error(&r);
+                            collections.extend(r.unwrap_or_default());
+                        }
 
-                        // Server-curated hubs. NotSupported (non-Plex) yields
-                        // an empty list, so those sources simply show no hub
-                        // rows.
-                        let hubs = src.hubs().await.unwrap_or_default();
+                        // Server-curated hubs. NotSupported (non-Plex) yields an
+                        // empty list, so those sources simply show no hub rows.
+                        let hubs = match src.hubs().await {
+                            Ok(h) => h,
+                            Err(e) => {
+                                complete &= matches!(e, SourceError::NotSupported(_));
+                                Vec::new()
+                            }
+                        };
 
                         HomeViewCmd::HomeData {
                             continue_watching,
                             recently_added,
                             collections,
                             hubs,
+                            complete,
                         }
                     });
                 } else {
                     self.loading = false;
                     self.refresh_visible_page();
                 }
+            }
+            HomeViewMsg::ShowCached(home) => {
+                // Instant render from the session cache: no fetch, no loading page.
+                self.loading = false;
+                self.last_error = None;
+                self.clear_shelves();
+                let CachedHome {
+                    continue_watching,
+                    recently_added,
+                    collections,
+                    hubs,
+                    ..
+                } = *home;
+                self.render_home(
+                    continue_watching,
+                    recently_added,
+                    collections,
+                    hubs,
+                    &sender,
+                );
             }
             HomeViewMsg::LoadError(msg) => {
                 self.loading = false;
@@ -533,72 +591,29 @@ impl Component for HomeView {
                 recently_added,
                 collections,
                 hubs,
+                complete,
             } => {
                 self.loading = false;
-
-                // Drop content from hidden libraries before anything consumes
-                // the lists. Filtering here (at receive time, against the
-                // current hidden set) rather than at fetch time means a library
-                // hidden while a fetch was in flight is still excluded.
-                let continue_watching = retain_visible_merged(continue_watching, &self.hidden);
-                let recently_added: Vec<(String, Vec<MediaItem>)> = recently_added
-                    .into_iter()
-                    .filter_map(|(title, items)| {
-                        let items =
-                            crate::services::visibility::retain_visible_items(items, &self.hidden);
-                        (!items.is_empty()).then_some((title, items))
-                    })
-                    .collect();
-
-                // Featured hero: drawn from recently-added items that have a
-                // backdrop. Computed before the shelves consume the lists.
-                let hero_pool: Vec<MediaItem> = recently_added
-                    .iter()
-                    .flat_map(|(_, items)| items.iter().cloned())
-                    .collect();
-                self.set_hero(hero_candidates(&hero_pool, 6), &sender);
-
-                if !continue_watching.is_empty() {
-                    let cw_id = self.add_shelf("Continue Watching");
-                    let cards: Vec<(MediaItem, Option<f64>, String)> = continue_watching
-                        .into_iter()
-                        .map(|(item, label)| {
-                            let frac = item.resume_fraction();
-                            (item, frac, label)
-                        })
-                        .collect();
-                    self.populate_continue_watching(cw_id, cards, &sender);
+                // Hand a complete load to App for session caching (App fills the
+                // source-set key). A partial load renders but is not cached, so a
+                // transient source failure never freezes an incomplete Home.
+                if complete {
+                    let _ = sender.output(HomeViewOutput::HomeAssembled(Box::new(CachedHome {
+                        source_set_key: String::new(),
+                        continue_watching: continue_watching.clone(),
+                        recently_added: recently_added.clone(),
+                        collections: collections.clone(),
+                        hubs: hubs.clone(),
+                        epoch: 0,
+                    })));
                 }
-
-                // One Recently Added shelf per library (already filtered to
-                // non-empty libraries, in library order).
-                for (library_title, items) in recently_added {
-                    let ra_id = self.add_shelf(&format!("Recently Added — {library_title}"));
-                    let cards: Vec<(MediaItem, Option<f64>)> =
-                        items.into_iter().map(|item| (item, None)).collect();
-                    self.populate_shelf(ra_id, cards, false, &sender);
-                }
-
-                if !collections.is_empty() {
-                    let col_id = self.add_shelf("Collections");
-                    let cards: Vec<(MediaItem, Option<f64>)> =
-                        collections.into_iter().map(|item| (item, None)).collect();
-                    self.populate_shelf(col_id, cards, false, &sender);
-                }
-
-                // Append server-curated hubs below the Reel-owned core, dropping
-                // any that duplicate Continue Watching / Recently Added.
-                for hub in hubs {
-                    if hub.items.is_empty() || hub_duplicates_core(hub.identifier.as_deref()) {
-                        continue;
-                    }
-                    let hub_id = self.add_shelf(&hub.title);
-                    let cards: Vec<(MediaItem, Option<f64>)> =
-                        hub.items.into_iter().map(|item| (item, None)).collect();
-                    self.populate_shelf(hub_id, cards, false, &sender);
-                }
-
-                self.refresh_visible_page();
+                self.render_home(
+                    continue_watching,
+                    recently_added,
+                    collections,
+                    hubs,
+                    &sender,
+                );
             }
             HomeViewCmd::Error(msg) => {
                 sender.input(HomeViewMsg::LoadError(msg));
@@ -628,6 +643,83 @@ impl Component for HomeView {
 }
 
 impl HomeView {
+    /// Build the Home shelves from assembled data. Shared by a completed network
+    /// load (`HomeData`) and an instant cache render (`ShowCached`). Applies the
+    /// current hidden-library filter at render time, so a visibility change is
+    /// reflected even when rendering from cache. Assumes shelves were already
+    /// cleared by the caller.
+    fn render_home(
+        &mut self,
+        continue_watching: Vec<(MediaItem, String)>,
+        recently_added: Vec<(String, Vec<MediaItem>)>,
+        collections: Vec<MediaItem>,
+        hubs: Vec<MediaHub>,
+        sender: &ComponentSender<Self>,
+    ) {
+        // Drop content from hidden libraries before anything consumes the lists.
+        // Filtering here (at render time, against the current hidden set) means a
+        // library hidden while a fetch was in flight — or since the cache was
+        // populated — is still excluded.
+        let continue_watching = retain_visible_merged(continue_watching, &self.hidden);
+        let recently_added: Vec<(String, Vec<MediaItem>)> = recently_added
+            .into_iter()
+            .filter_map(|(title, items)| {
+                let items = crate::services::visibility::retain_visible_items(items, &self.hidden);
+                (!items.is_empty()).then_some((title, items))
+            })
+            .collect();
+
+        // Featured hero: drawn from recently-added items that have a backdrop.
+        // Computed before the shelves consume the lists.
+        let hero_pool: Vec<MediaItem> = recently_added
+            .iter()
+            .flat_map(|(_, items)| items.iter().cloned())
+            .collect();
+        self.set_hero(hero_candidates(&hero_pool, 6), sender);
+
+        if !continue_watching.is_empty() {
+            let cw_id = self.add_shelf("Continue Watching");
+            let cards: Vec<(MediaItem, Option<f64>, String)> = continue_watching
+                .into_iter()
+                .map(|(item, label)| {
+                    let frac = item.resume_fraction();
+                    (item, frac, label)
+                })
+                .collect();
+            self.populate_continue_watching(cw_id, cards, sender);
+        }
+
+        // One Recently Added shelf per library (already filtered to non-empty
+        // libraries, in library order).
+        for (library_title, items) in recently_added {
+            let ra_id = self.add_shelf(&format!("Recently Added — {library_title}"));
+            let cards: Vec<(MediaItem, Option<f64>)> =
+                items.into_iter().map(|item| (item, None)).collect();
+            self.populate_shelf(ra_id, cards, false, sender);
+        }
+
+        if !collections.is_empty() {
+            let col_id = self.add_shelf("Collections");
+            let cards: Vec<(MediaItem, Option<f64>)> =
+                collections.into_iter().map(|item| (item, None)).collect();
+            self.populate_shelf(col_id, cards, false, sender);
+        }
+
+        // Append server-curated hubs below the Reel-owned core, dropping any that
+        // duplicate Continue Watching / Recently Added.
+        for hub in hubs {
+            if hub.items.is_empty() || hub_duplicates_core(hub.identifier.as_deref()) {
+                continue;
+            }
+            let hub_id = self.add_shelf(&hub.title);
+            let cards: Vec<(MediaItem, Option<f64>)> =
+                hub.items.into_iter().map(|item| (item, None)).collect();
+            self.populate_shelf(hub_id, cards, false, sender);
+        }
+
+        self.refresh_visible_page();
+    }
+
     /// Drop all shelves and bump the build generation so any in-flight poster
     /// loads from the previous build are ignored when they arrive.
     fn clear_shelves(&mut self) {
@@ -847,6 +939,27 @@ impl HomeView {
 mod tests {
     use super::*;
     use crate::models::media::{MediaType, SourceType};
+
+    #[test]
+    fn not_supported_is_not_a_real_error() {
+        // A source that doesn't offer a row (NotSupported) is empty-success and
+        // must not mark a Home load incomplete.
+        let r: Result<Vec<MediaItem>, SourceError> =
+            Err(SourceError::NotSupported("no hubs".into()));
+        assert!(!is_real_source_error(&r));
+    }
+
+    #[test]
+    fn connection_failure_is_a_real_error() {
+        let r: Result<Vec<MediaItem>, SourceError> = Err(SourceError::Connection("timeout".into()));
+        assert!(is_real_source_error(&r));
+    }
+
+    #[test]
+    fn empty_success_is_not_a_real_error() {
+        let r: Result<Vec<MediaItem>, SourceError> = Ok(Vec::new());
+        assert!(!is_real_source_error(&r));
+    }
 
     fn cw_item(source_type: SourceType, source_id: &str, external_id: &str) -> MediaItem {
         MediaItem {

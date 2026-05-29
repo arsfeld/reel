@@ -34,7 +34,7 @@ use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 use crate::services::mpris::{self, MprisBridge, MprisCommand};
 use crate::services::screensaver::ScreensaverInhibitor;
-use crate::services::session_cache::SessionContentCache;
+use crate::services::session_cache::{CachedHome, SessionContentCache};
 use crate::services::watch_state::WatchStateTracker;
 use crate::settings::Settings;
 
@@ -252,6 +252,18 @@ impl App {
             .collect()
     }
 
+    /// Session-cache key for the current Home, derived from the connected source
+    /// set. Changes whenever a source is added or removed, so the cached Home is
+    /// a natural miss after the set changes.
+    fn home_source_set_key(&self) -> String {
+        let sources: Vec<(SourceType, String)> = self
+            .sources
+            .iter()
+            .map(|e| (e.source_type, e.source_id.clone()))
+            .collect();
+        SessionContentCache::source_set_key(&sources)
+    }
+
     /// Register a freshly-built source and add it to the sidebar as its own
     /// group: register in the live registry (idempotent), push its identity +
     /// visibility into the sidebar, and spawn an async libraries fetch. Called
@@ -441,6 +453,9 @@ pub enum AppMsg {
         section_key: String,
         items: Vec<MediaItem>,
     },
+    /// Store the assembled Home payload in the session content cache, keyed by
+    /// the current source set.
+    CacheHome(Box<CachedHome>),
     /// Persist a library/Collections visibility change (composite key + visible).
     SetLibraryVisible {
         key: String,
@@ -697,6 +712,7 @@ impl Component for App {
                 },
                 HomeViewOutput::ShowConnectionDialog => AppMsg::ShowConnectionDialog,
                 HomeViewOutput::Error(msg) => AppMsg::ShowToast(msg),
+                HomeViewOutput::HomeAssembled(home) => AppMsg::CacheHome(home),
             });
 
         let library_view = LibraryView::builder().launch(()).forward(
@@ -956,8 +972,15 @@ impl Component for App {
                 self.home_view.emit(HomeViewMsg::SetVisibility(
                     self.settings.library_visibility.hidden.clone(),
                 ));
-                let in_progress = load_in_progress(&self.db);
-                self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
+                // Home cache hit → instant render; miss → full load.
+                let set_key = self.home_source_set_key();
+                if let Some(home) = self.content_cache.get_home(&set_key) {
+                    self.home_view
+                        .emit(HomeViewMsg::ShowCached(Box::new(home.clone())));
+                } else {
+                    let in_progress = load_in_progress(&self.db);
+                    self.home_view.emit(HomeViewMsg::LoadHome { in_progress });
+                }
             }
             AppMsg::Navigate {
                 section,
@@ -999,6 +1022,12 @@ impl Component for App {
                     let key = SessionContentCache::library_key(*st, source_id, &section_key);
                     self.content_cache.put_library(&key, items);
                 }
+            }
+            AppMsg::CacheHome(home) => {
+                // Stamp the assembled payload with the current source set, then store.
+                let mut home = *home;
+                home.source_set_key = self.home_source_set_key();
+                self.content_cache.set_home(home);
             }
             AppMsg::SetLibraryVisible { key, visible } => {
                 // `key` is the composite visibility key built by the sidebar.
