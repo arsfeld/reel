@@ -417,6 +417,14 @@ fn set_download_flag(playbin: &gst::Element) -> bool {
     true
 }
 
+/// Classify a pipeline error as a *render* failure (the stream can't be decoded
+/// or negotiated to the sink) versus a transport failure (network/resource).
+/// Render failures drive the transcode fallback (U4); transport errors don't.
+fn is_render_failure(err: &glib::Error) -> bool {
+    err.kind::<gst::StreamError>().is_some()
+        || matches!(err.kind::<gst::CoreError>(), Some(gst::CoreError::Negotiation))
+}
+
 pub(crate) fn make_element(name: &str) -> Option<gst::Element> {
     match gst::ElementFactory::make(name).build() {
         Ok(el) => Some(el),
@@ -467,6 +475,14 @@ fn handle_bus_message(
             );
             *flags.error.borrow_mut() = Some(glib_err.to_string());
             flags.seeking.set(false);
+            // A stream/negotiation/decode error means the current stream can't
+            // render (e.g. the color-convert stage couldn't negotiate). Signal a
+            // render failure so the App can fall back to a server transcode (U4).
+            // Transport errors (GstResourceError) are left to surface as the
+            // status-plate error string, not a transcode fallback.
+            if is_render_failure(&glib_err) {
+                sender(PipelineBusMsg::RenderFailed);
+            }
         }
         MessageView::AsyncDone(_) => {
             flags.prepared.set(true);

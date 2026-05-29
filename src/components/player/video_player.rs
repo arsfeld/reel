@@ -107,6 +107,12 @@ pub(crate) enum VideoPlayerOutput {
     SeekReload {
         position_secs: f64,
     },
+    /// The pipeline reported a render/negotiation failure (U4/R4): the parent
+    /// falls back by re-resolving the same item with a forced server transcode,
+    /// resuming at `position_secs`.
+    RenderFailed {
+        position_secs: f64,
+    },
     /// Audio-track change during a transcode (AE6): the parent re-resolves with
     /// the chosen Plex `audioStreamID` + reload-at-position (not a live select).
     SelectAudioTrack {
@@ -214,6 +220,9 @@ pub(crate) enum VideoPlayerMsg {
     /// Buffering progress (0-100) from the pipeline bus, for the status-plate
     /// indicator.
     Buffering(i32),
+    /// The pipeline bus reported a render/negotiation failure (U4): ask the
+    /// parent to fall back to a server transcode for the current item.
+    RenderFailed,
 }
 
 /// Independent playback flags grouped to keep `VideoPlayer`'s top-level
@@ -869,6 +878,11 @@ impl VideoPlayer {
                 );
             }
             VideoPlayerMsg::SelectQuality(preset) => self.handle_select_quality(&sender, preset),
+            VideoPlayerMsg::RenderFailed => {
+                // Resume where the failed stream was (≈0 for a load-time failure).
+                let position_secs = self.display_position_us() as f64 / 1_000_000.0;
+                let _ = sender.output(VideoPlayerOutput::RenderFailed { position_secs });
+            }
             VideoPlayerMsg::Clear => {
                 self.tracks.clear();
                 self.track_ui_signature.clear();
@@ -1460,6 +1474,9 @@ impl VideoPlayer {
             }
             PipelineBusMsg::Buffering { percent } => {
                 sender_bus.input(VideoPlayerMsg::Buffering(percent));
+            }
+            PipelineBusMsg::RenderFailed => {
+                sender_bus.input(VideoPlayerMsg::RenderFailed);
             }
         });
 
