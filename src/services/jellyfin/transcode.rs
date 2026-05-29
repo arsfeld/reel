@@ -21,7 +21,8 @@ use crate::services::media_source::SourceError;
 use super::api::JellyfinClient;
 use super::error::JellyfinTranscodeError;
 use super::models::{MediaSourceInfo, MediaStream, PlaybackInfoResponse};
-use super::transcode_profile::device_profile;
+use super::transcode_profile::{device_profile, effective_preset};
+use crate::models::playback::QualityPreset;
 
 /// Single-attempt decision timeout. Deliberately short — the call blocks the
 /// Play action, so a slow server should fail fast to the caller's fallback
@@ -100,7 +101,8 @@ impl JellyfinClient {
             .await
             .map_err(|e| JellyfinTranscodeError::Parse(e.to_string()))?;
 
-        self.decision_from_response(req, requested_source_id.as_deref(), info)
+        let cap = effective_preset(req.quality, self.is_remote());
+        self.decision_from_response(req, requested_source_id.as_deref(), info, cap)
     }
 
     /// Build the `PlaybackInfoDto` request body.
@@ -141,6 +143,7 @@ impl JellyfinClient {
         req: &PlaybackRequest,
         requested_source_id: Option<&str>,
         info: PlaybackInfoResponse,
+        cap: Option<QualityPreset>,
     ) -> Result<PlaybackDecision, JellyfinTranscodeError> {
         // Prefer the source matching the requested id; else the first.
         let source = requested_source_id
@@ -152,17 +155,28 @@ impl JellyfinClient {
             .or_else(|| info.media_sources.first())
             .ok_or(JellyfinTranscodeError::NoDecision)?;
 
+        // A source must support transcoding AND carry a URL to be a real
+        // DirectStream/Transcode decision; if direct-play is off and neither a
+        // remux URL nor transcoding is available, there is no playable mode.
         let kind = if source.supports_direct_play {
             PlaybackDecisionKind::DirectPlay
-        } else if source.supports_direct_stream {
-            PlaybackDecisionKind::DirectStream
-        } else if source.supports_transcoding && source.transcoding_url.is_some() {
-            PlaybackDecisionKind::Transcode
+        } else if source.transcoding_url.is_some() {
+            if source.supports_direct_stream {
+                PlaybackDecisionKind::DirectStream
+            } else {
+                PlaybackDecisionKind::Transcode
+            }
         } else {
             return Err(JellyfinTranscodeError::NoDecision);
         };
 
-        let source_id = source.id.clone().unwrap_or_default();
+        // Fall back to the requested source id when the response omits it, so a
+        // direct-play URL never carries an empty mediaSourceId.
+        let source_id = source
+            .id
+            .clone()
+            .or_else(|| requested_source_id.map(str::to_string))
+            .unwrap_or_default();
         let (url, session) = match kind {
             PlaybackDecisionKind::DirectPlay => {
                 (self.stream_url(&req.rating_key, &source_id), None)
@@ -179,7 +193,7 @@ impl JellyfinClient {
             }
         };
 
-        let (video_resolution, video_bitrate_kbps) = video_output(source);
+        let (video_resolution, video_bitrate_kbps) = video_output(source, kind, cap);
         let audio_streams = decision_streams(
             source,
             "Audio",
@@ -208,8 +222,10 @@ impl JellyfinClient {
 
     /// Resolve a server-returned (relative) `TranscodingUrl` to an absolute URL,
     /// guaranteeing the in-URL `api_key` GStreamer needs for segment auth
-    /// (KTD2b). Refuses an absolute/cross-origin URL (SSRF guard) by treating
-    /// only the leading-slash relative form as valid.
+    /// (KTD2b). Always prefixes `base_url`, so a hostile cross-origin value
+    /// (e.g. `http://evil/x` or `//evil/x`) is neutralized into a path on the
+    /// trusted host rather than fetched cross-origin. Jellyfin returns a
+    /// leading-slash relative URL in practice.
     fn absolute_transcode_url(&self, relative: &str) -> String {
         let rel = if relative.starts_with('/') {
             relative.to_string()
@@ -227,10 +243,27 @@ impl JellyfinClient {
     }
 }
 
-/// Derive `(video_resolution, video_bitrate_kbps)` for the indicator from the
-/// selected source: resolution as the bare height ("1080"), bitrate from the
-/// source's overall bitrate (bits/sec → kbps).
-fn video_output(source: &MediaSourceInfo) -> (Option<String>, Option<i64>) {
+/// Derive `(video_resolution, video_bitrate_kbps)` for the decision indicator.
+///
+/// Jellyfin's PlaybackInfo `MediaStreams`/`Bitrate` describe the *source* file,
+/// not the encoder output. For a capped `Transcode` the indicator must reflect
+/// what the user will actually see, so report the requested cap (the rung's
+/// height and max bitrate) — mirroring Plex, which shows server-actual output.
+/// DirectStream is a remux (video unchanged) and DirectPlay is the source, so
+/// both correctly use the source values; an uncapped transcode (`Original`)
+/// also falls back to source.
+fn video_output(
+    source: &MediaSourceInfo,
+    kind: PlaybackDecisionKind,
+    cap: Option<QualityPreset>,
+) -> (Option<String>, Option<i64>) {
+    if let Some(preset) = cap.filter(|_| kind == PlaybackDecisionKind::Transcode) {
+        let resolution = preset.video_dimensions().map(|(_, h)| h.to_string());
+        let bitrate_kbps = preset.max_video_bitrate_kbps().map(|k| k as i64);
+        if resolution.is_some() || bitrate_kbps.is_some() {
+            return (resolution, bitrate_kbps);
+        }
+    }
     let resolution = source
         .media_streams
         .iter()
@@ -310,6 +343,10 @@ mod tests {
         JellyfinClient::new(base, "secret-token", "user1", "dev1")
     }
 
+    fn remote_client(base: &str) -> JellyfinClient {
+        JellyfinClient::new(base, "secret-token", "user1", "dev1").with_remote(true)
+    }
+
     fn direct_play_body() -> serde_json::Value {
         json!({
             "PlaySessionId": "ps-direct",
@@ -386,6 +423,49 @@ mod tests {
         );
         assert_eq!(d.session.as_deref(), Some("ps-trans"));
         assert_eq!(d.video_resolution.as_deref(), Some("2160"));
+    }
+
+    #[tokio::test]
+    async fn capped_transcode_reports_cap_resolution_not_source() {
+        // A 4K source transcoded under the remote-default cap (1080p/8Mbps) must
+        // show the cap in the indicator, not the source's 2160/18Mbps.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Items/item9/PlaybackInfo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(transcode_body()))
+            .mount(&server)
+            .await;
+        let c = remote_client(&server.uri());
+        // Auto on a remote connection applies REMOTE_DEFAULT (1080p / 8 Mbps).
+        let d = c.resolve_decision(&req("item9|src1")).await.unwrap();
+        assert_eq!(d.kind, PlaybackDecisionKind::Transcode);
+        assert_eq!(d.video_resolution.as_deref(), Some("1080"));
+        assert_eq!(d.video_bitrate_kbps, Some(8000));
+    }
+
+    #[tokio::test]
+    async fn direct_stream_kind_and_session() {
+        let server = MockServer::start().await;
+        let body = json!({
+            "PlaySessionId": "ps-remux",
+            "MediaSources": [{
+                "Id": "src1",
+                "SupportsDirectPlay": false,
+                "SupportsDirectStream": true,
+                "SupportsTranscoding": true,
+                "TranscodingUrl": "/videos/item9/master.m3u8?api_key=secret-token",
+                "MediaStreams": [{"Index": 1, "Type": "Audio", "Codec": "aac"}]
+            }]
+        });
+        Mock::given(method("POST"))
+            .and(path("/Items/item9/PlaybackInfo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let c = client(&server.uri());
+        let d = c.resolve_decision(&req("item9|src1")).await.unwrap();
+        assert_eq!(d.kind, PlaybackDecisionKind::DirectStream);
+        assert_eq!(d.session.as_deref(), Some("ps-remux"));
     }
 
     #[tokio::test]

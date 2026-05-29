@@ -20,7 +20,7 @@ use crate::models::playback::{QualityPreset, QualitySelection};
 ///
 /// Duplicated from the Plex `effective_preset` rather than shared, keeping the
 /// backends' transcode code independent (KTD7 — the cost is five lines).
-fn effective_preset(quality: QualitySelection, is_remote: bool) -> Option<QualityPreset> {
+pub fn effective_preset(quality: QualitySelection, is_remote: bool) -> Option<QualityPreset> {
     match quality {
         QualitySelection::Manual(p) => Some(p),
         QualitySelection::Auto if is_remote => Some(QualityPreset::REMOTE_DEFAULT),
