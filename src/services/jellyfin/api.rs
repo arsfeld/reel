@@ -16,6 +16,10 @@ pub struct JellyfinClient {
     token: String,
     user_id: String,
     device_id: String,
+    /// Whether the active connection is remote. Session-only (never persisted);
+    /// playback reads this to apply the Auto default bitrate cap on remote
+    /// connections (R3). Defaults to `false`; set via [`Self::with_remote`].
+    is_remote: bool,
 }
 
 impl JellyfinClient {
@@ -49,7 +53,22 @@ impl JellyfinClient {
             token: token.to_string(),
             user_id: user_id.to_string(),
             device_id: device_id.to_string(),
+            is_remote: false,
         }
+    }
+
+    /// Record whether the selected server connection is remote. Builder style so
+    /// existing `JellyfinClient::new` call sites are unaffected (mirrors
+    /// `PlexClient::with_remote`; session-only, set at construction).
+    pub fn with_remote(mut self, is_remote: bool) -> Self {
+        self.is_remote = is_remote;
+        self
+    }
+
+    /// Whether the active connection is remote (R3). Playback reads this to
+    /// decide whether to apply the Auto default transcode bitrate cap.
+    pub fn is_remote(&self) -> bool {
+        self.is_remote
     }
 
     pub fn base_url(&self) -> &str {
