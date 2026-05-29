@@ -28,6 +28,60 @@ use std::collections::HashMap;
 /// and entry-count bounding keeps the implementation simple. Not user-facing.
 pub const DEFAULT_LIBRARY_CAPACITY: usize = 12;
 
+/// A change to the connected-source set (or library visibility) that the cache
+/// must react to. Drives `invalidation_for`, which keeps the "what to drop"
+/// policy pure and testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceSetEvent {
+    /// A source was added: only Home (which spans the whole set) goes stale.
+    SourceAdded,
+    /// A source was removed: that source's library entries AND Home go stale.
+    SourceRemoved,
+    /// The browsed source changed: nothing — library entries are per-source and
+    /// stay valid, and Home spans the (unchanged) full set (KTD-2).
+    BrowsedSwitched,
+    /// A library's visibility toggled: Home is filtered by it, so it goes stale.
+    VisibilityChanged,
+}
+
+/// What `apply_invalidation` should drop for a given event. Pure description; the
+/// caller supplies the removed source's key prefix when `source_libraries` is set.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CacheInvalidation {
+    /// Drop the Home slot.
+    pub home: bool,
+    /// Drop the affected source's library entries (by key prefix).
+    pub source_libraries: bool,
+    /// Advance the source-set epoch so an in-flight refetch built against the
+    /// old set is dropped on return.
+    pub bump_source_set_epoch: bool,
+}
+
+/// The pure invalidation policy: given a source-set event, what must the cache
+/// drop? Keeps the decision testable and centralizes KTD-2 (browsed switch is a
+/// no-op) and the add/remove asymmetry (add → Home only; remove → Home + that
+/// source's libraries).
+pub fn invalidation_for(event: SourceSetEvent) -> CacheInvalidation {
+    match event {
+        SourceSetEvent::SourceAdded => CacheInvalidation {
+            home: true,
+            source_libraries: false,
+            bump_source_set_epoch: true,
+        },
+        SourceSetEvent::SourceRemoved => CacheInvalidation {
+            home: true,
+            source_libraries: true,
+            bump_source_set_epoch: true,
+        },
+        SourceSetEvent::BrowsedSwitched => CacheInvalidation::default(),
+        SourceSetEvent::VisibilityChanged => CacheInvalidation {
+            home: true,
+            source_libraries: false,
+            bump_source_set_epoch: false,
+        },
+    }
+}
+
 /// A cached library section: the raw fetched items plus the epoch the entry was
 /// last written under. The epoch is used by background revalidation to drop a
 /// refetch result whose entry was superseded or evicted while in flight.
@@ -249,6 +303,22 @@ impl SessionContentCache {
     pub fn bump_source_set_epoch(&mut self) {
         self.source_set_epoch += 1;
     }
+
+    /// Apply a computed invalidation. `source_prefix` is required when
+    /// `inv.source_libraries` is set (the removed source's `{type}:{id}:` prefix).
+    pub fn apply_invalidation(&mut self, inv: CacheInvalidation, source_prefix: Option<&str>) {
+        if inv.source_libraries
+            && let Some(prefix) = source_prefix
+        {
+            self.invalidate_source(prefix);
+        }
+        if inv.home {
+            self.invalidate_home();
+        }
+        if inv.bump_source_set_epoch {
+            self.bump_source_set_epoch();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -442,5 +512,76 @@ mod tests {
         let before = c.source_set_epoch();
         c.bump_source_set_epoch();
         assert!(c.source_set_epoch() > before);
+    }
+
+    #[test]
+    fn invalidation_map_matches_policy() {
+        // Add → Home only; Remove → Home + that source's libraries; browsed
+        // switch → nothing; visibility → Home only (no epoch bump).
+        assert_eq!(
+            invalidation_for(SourceSetEvent::SourceAdded),
+            CacheInvalidation {
+                home: true,
+                source_libraries: false,
+                bump_source_set_epoch: true,
+            }
+        );
+        assert_eq!(
+            invalidation_for(SourceSetEvent::SourceRemoved),
+            CacheInvalidation {
+                home: true,
+                source_libraries: true,
+                bump_source_set_epoch: true,
+            }
+        );
+        assert_eq!(
+            invalidation_for(SourceSetEvent::BrowsedSwitched),
+            CacheInvalidation::default()
+        );
+        assert!(invalidation_for(SourceSetEvent::VisibilityChanged).home);
+        assert!(!invalidation_for(SourceSetEvent::VisibilityChanged).bump_source_set_epoch);
+    }
+
+    #[test]
+    fn browsed_switch_invalidates_nothing() {
+        // KTD-2: switching the browsed source keeps both source's library entries
+        // and the Home slot intact.
+        let mut c = SessionContentCache::with_capacity(10);
+        c.put_library("plex:srvA:1", items(&["a"]));
+        c.put_library("plex:srvB:1", items(&["b"]));
+        c.set_home(CachedHome {
+            source_set_key: "plex:srvA|plex:srvB".into(),
+            continue_watching: Vec::new(),
+            recently_added: Vec::new(),
+            collections: Vec::new(),
+            hubs: Vec::new(),
+            epoch: 0,
+        });
+        c.apply_invalidation(invalidation_for(SourceSetEvent::BrowsedSwitched), None);
+        assert!(c.contains_library("plex:srvA:1"));
+        assert!(c.contains_library("plex:srvB:1"));
+        assert!(c.get_home("plex:srvA|plex:srvB").is_some());
+    }
+
+    #[test]
+    fn source_removed_drops_its_libraries_and_home_keeps_others() {
+        let mut c = SessionContentCache::with_capacity(10);
+        c.put_library("plex:srvA:1", items(&["a"]));
+        c.put_library("plex:srvB:1", items(&["b"]));
+        c.set_home(CachedHome {
+            source_set_key: "plex:srvA|plex:srvB".into(),
+            continue_watching: Vec::new(),
+            recently_added: Vec::new(),
+            collections: Vec::new(),
+            hubs: Vec::new(),
+            epoch: 0,
+        });
+        c.apply_invalidation(
+            invalidation_for(SourceSetEvent::SourceRemoved),
+            Some("plex:srvA:"),
+        );
+        assert!(!c.contains_library("plex:srvA:1"));
+        assert!(c.contains_library("plex:srvB:1"), "other source kept");
+        assert!(c.get_home("plex:srvA|plex:srvB").is_none(), "Home dropped");
     }
 }

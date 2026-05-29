@@ -34,7 +34,9 @@ use crate::services::artwork::ArtworkCache;
 use crate::services::media_source::MediaSource;
 use crate::services::mpris::{self, MprisBridge, MprisCommand};
 use crate::services::screensaver::ScreensaverInhibitor;
-use crate::services::session_cache::{CachedHome, SessionContentCache};
+use crate::services::session_cache::{
+    CachedHome, SessionContentCache, SourceSetEvent, invalidation_for,
+};
 use crate::services::watch_state::WatchStateTracker;
 use crate::settings::Settings;
 
@@ -287,6 +289,10 @@ impl App {
         // of the registry whenever a source is added.
         self.home_view
             .emit(HomeViewMsg::SetSources(self.home_sources()));
+        // The source set changed: the cached Home spans the whole set, so drop it
+        // (library entries are per-source and stay valid — KTD-2).
+        self.content_cache
+            .apply_invalidation(invalidation_for(SourceSetEvent::SourceAdded), None);
         let hidden = self.settings.library_visibility.hidden.clone();
 
         self.sidebar.emit(SidebarMsg::SetSource {
@@ -390,6 +396,12 @@ impl App {
         // Continue Watching row on the subsequent LoadHome.
         self.home_view
             .emit(HomeViewMsg::SetSources(self.home_sources()));
+        // Drop the removed source's cached library entries + the cached Home.
+        let prefix = format!("{}:{}:", st.as_str(), source_id.trim_end_matches('/'));
+        self.content_cache.apply_invalidation(
+            invalidation_for(SourceSetEvent::SourceRemoved),
+            Some(&prefix),
+        );
 
         // Persisted eviction: the saved source row, then its media items, then
         // any now-orphaned watch_progress rows (keyed by media_item_id, which
