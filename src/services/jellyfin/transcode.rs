@@ -56,7 +56,12 @@ impl JellyfinClient {
         let requested_source_id = req.part_key.split_once('|').map(|(_, src)| src.to_string());
 
         let (profile, max_bitrate_bps) = device_profile(req.quality, self.is_remote());
-        let body = self.build_body(req, requested_source_id.as_deref(), profile, max_bitrate_bps);
+        let body = self.build_body(
+            req,
+            requested_source_id.as_deref(),
+            profile,
+            max_bitrate_bps,
+        );
 
         let url = format!(
             "{}/Items/{}/PlaybackInfo?userId={}",
@@ -70,7 +75,10 @@ impl JellyfinClient {
             .post(&url)
             .header("Content-Type", "application/json")
             .timeout(DECISION_TIMEOUT)
-            .body(serde_json::to_vec(&body).map_err(|e| JellyfinTranscodeError::Parse(e.to_string()))?)
+            .body(
+                serde_json::to_vec(&body)
+                    .map_err(|e| JellyfinTranscodeError::Parse(e.to_string()))?,
+            )
             .send()
             .await
             .map_err(|e| {
@@ -172,7 +180,12 @@ impl JellyfinClient {
         };
 
         let (video_resolution, video_bitrate_kbps) = video_output(source);
-        let audio_streams = decision_streams(source, "Audio", req.audio_stream_id, source.default_audio_stream_index);
+        let audio_streams = decision_streams(
+            source,
+            "Audio",
+            req.audio_stream_id,
+            source.default_audio_stream_index,
+        );
         let subtitle_streams = decision_streams(
             source,
             "Subtitle",
@@ -364,7 +377,13 @@ mod tests {
         let c = client(&server.uri());
         let d = c.resolve_decision(&req("item9|src1")).await.unwrap();
         assert_eq!(d.kind, PlaybackDecisionKind::Transcode);
-        assert_eq!(d.url, format!("{}/videos/item9/master.m3u8?api_key=secret-token&mediaSourceId=src1", server.uri()));
+        assert_eq!(
+            d.url,
+            format!(
+                "{}/videos/item9/master.m3u8?api_key=secret-token&mediaSourceId=src1",
+                server.uri()
+            )
+        );
         assert_eq!(d.session.as_deref(), Some("ps-trans"));
         assert_eq!(d.video_resolution.as_deref(), Some("2160"));
     }
@@ -432,7 +451,10 @@ mod tests {
             .await;
         let c = client(&server.uri());
         let err = c.resolve_decision(&req("item9|src1")).await.unwrap_err();
-        assert!(matches!(err, JellyfinTranscodeError::Server { status: 500 }));
+        assert!(matches!(
+            err,
+            JellyfinTranscodeError::Server { status: 500 }
+        ));
         // Loud, not retryable.
         assert!(matches!(SourceError::from(err), SourceError::Other(_)));
     }
