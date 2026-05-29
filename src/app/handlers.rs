@@ -6,23 +6,29 @@ use adw::prelude::*;
 use relm4::prelude::*;
 use tracing::{debug, info, warn};
 
+use crate::components::downloads::DownloadsViewMsg;
+use crate::components::home::HomeViewMsg;
 use crate::components::library::LibraryViewMsg;
 use crate::components::player::video_player::{VideoPlayerMsg, VideoPlayerOutput};
 use crate::db::downloads_repo::DownloadsRepo;
 use crate::db::watch_progress_repo::WatchProgressRepo;
 use crate::models::download::DownloadState;
-use crate::models::media::{MediaItem, SourceType};
+use crate::models::library::LibrarySection;
+use crate::models::media::{MediaItem, MediaType, SourceType};
 use crate::models::source::{Source, SourceConfig};
+use crate::models::watch::WatchProgress;
 use crate::navigation::CurrentView;
 use crate::player::PlayState;
 use crate::services::mpris;
+use crate::services::session_cache::{CachedHome, SessionContentCache};
 use crate::services::watch_state::PlaybackState;
 
 use super::App;
 use super::AppCmd;
 use super::AppMsg;
-use super::db_helpers::load_watch_data;
+use super::db_helpers::{load_in_progress, load_watch_data};
 use super::player_ui::{enter_player_mode, leave_player_mode, player_title_for_item};
+use super::utils::iso_now;
 use super::watch_events::{dispatch_watch_events, resume_position};
 
 /// Handle VideoOutput messages from the video player component.
@@ -804,6 +810,422 @@ pub fn handle_connection_saved(
 
     // The source is live — start any queued/recovered downloads.
     super::download_handlers::start_pending(app);
+}
+
+/// Handle NavigateHome: switch to the Home view, rendering from the session
+/// content cache (instant + background revalidate) on a hit, or loading on a
+/// miss.
+pub fn handle_navigate_home(app: &mut App, root: &adw::ApplicationWindow) {
+    app.current_view = CurrentView::Home;
+    app.stack.set_visible_child_name("shell");
+    app.nav_view.replace_with_tags(&["home"]);
+    root.set_fullscreened(false);
+    root.set_title(Some("Reel"));
+    // Load home data: in-progress from local DB + recently_added from source
+    app.home_view.emit(HomeViewMsg::SetVisibility(
+        app.settings.library_visibility.hidden.clone(),
+    ));
+    // Home cache hit → instant render + background revalidate; miss → load.
+    let set_key = app.home_source_set_key();
+    if let Some(home) = app.content_cache.get_home(&set_key) {
+        app.home_view
+            .emit(HomeViewMsg::ShowCached(Box::new(home.clone())));
+        // Revalidate in the background only when a server source can be
+        // refreshed (Local-only Home revalidation is deferred). Gate on
+        // the same condition HomeView uses so the in-flight flag can't
+        // get stuck with no completion to clear it.
+        let has_server = app
+            .sources
+            .iter()
+            .any(|e| e.source_type.provides_server_hubs());
+        if has_server && !app.home_revalidating {
+            app.home_revalidating = true;
+            app.home_revalidate_epoch = app.content_cache.source_set_epoch();
+            app.home_view.emit(HomeViewMsg::Revalidate);
+        }
+    } else {
+        let in_progress = load_in_progress(&app.db);
+        app.home_view.emit(HomeViewMsg::LoadHome { in_progress });
+    }
+}
+
+/// Handle Navigate: switch to a library view, pointing the browsed source at
+/// the navigated library's owner and rendering from the session content cache
+/// (instant + background revalidate) on a hit, or loading on a miss.
+pub fn handle_navigate(
+    app: &mut App,
+    section: LibrarySection,
+    source_type: String,
+    source_id: String,
+    sender: &ComponentSender<App>,
+    root: &adw::ApplicationWindow,
+) {
+    app.current_view = CurrentView::Library(section.key.clone());
+    app.stack.set_visible_child_name("shell");
+    app.nav_view.replace_with_tags(&["library"]);
+    root.set_fullscreened(false);
+    root.set_title(Some("Reel"));
+    app.library_title.set_label(&section.title);
+    // Point the browsed source at the navigated library's owner and
+    // feed that source to the LibraryView list (per-item paths still
+    // resolve their own source).
+    let parsed = SourceType::from_str(&source_type);
+    if let Some(st) = parsed {
+        app.browsed_source = Some((st, source_id.clone()));
+        if let Some(src) = app.sources.get(st, &source_id) {
+            app.library_view
+                .emit(LibraryViewMsg::SetSource(src, app.artwork_cache.clone()));
+        }
+    }
+    // Session-cache hit → render instantly without a fetch; miss → load.
+    let cached = parsed.and_then(|st| {
+        let key = SessionContentCache::library_key(st, &source_id, &section.key);
+        app.content_cache.get_library(&key).map(<[_]>::to_vec)
+    });
+    match cached {
+        Some(items) => {
+            // Instant render, then revalidate in the background (U5).
+            let st = parsed.expect("cache hit implies a parsed source type");
+            let cache_key = SessionContentCache::library_key(st, &source_id, &section.key);
+            let section_key = section.key.clone();
+            let src = app.sources.get(st, &source_id);
+            app.library_view
+                .emit(LibraryViewMsg::ShowCached(section, items));
+            if let Some(src) = src {
+                app.revalidate_library(cache_key, section_key, src, sender);
+            }
+        }
+        None => app.library_view.emit(LibraryViewMsg::LoadLibrary(section)),
+    }
+}
+
+/// Handle CacheLibraryItems: store freshly-fetched items in the session content
+/// cache, keyed by the items' OWN source so a late-returning fetch caches under
+/// the correct key even after the user navigated away.
+pub fn handle_cache_library_items(app: &mut App, section_key: String, items: Vec<MediaItem>) {
+    // Key from the items' OWN source, not the (possibly already
+    // advanced) browsed source: a fetch for library A returning after
+    // the user navigated to B must still cache under A's key. Empty
+    // results carry no source, so fall back to the browsed source.
+    let source = items
+        .first()
+        .map(|i| (i.source_type, i.source_id.clone()))
+        .or_else(|| app.browsed_source.clone());
+    if let Some((st, source_id)) = source {
+        let key = SessionContentCache::library_key(st, &source_id, &section_key);
+        app.content_cache.put_library(&key, items);
+    }
+}
+
+/// Handle CacheHome: stamp the assembled Home payload with the current source
+/// set and store it, re-rendering in place only when a background revalidation
+/// actually changed the content.
+pub fn handle_cache_home(app: &mut App, home: CachedHome) {
+    // Stamp the assembled payload with the current source set.
+    let mut home = home;
+    home.source_set_key = app.home_source_set_key();
+    let was_revalidating = std::mem::take(&mut app.home_revalidating);
+    // A revalidation whose source set changed mid-flight is stale: drop
+    // it (the changed set already invalidated Home and will reload).
+    if was_revalidating
+        && app
+            .content_cache
+            .source_set_changed_since(app.home_revalidate_epoch)
+    {
+        return;
+    }
+    // Re-render only when revalidation actually changed the content, so
+    // a revisit doesn't reset Home's scroll for nothing. Clone the
+    // payload only when we actually re-render; otherwise store by move.
+    let changed = app
+        .content_cache
+        .get_home(&home.source_set_key)
+        .is_none_or(|cached| !crate::services::session_cache::home_content_eq(cached, &home));
+    if was_revalidating && changed && app.current_view == CurrentView::Home {
+        app.content_cache.set_home(home.clone());
+        app.home_view.emit(HomeViewMsg::ShowCached(Box::new(home)));
+    } else {
+        app.content_cache.set_home(home);
+    }
+}
+
+/// Handle SidebarEditModeExited: refresh Home's visibility, and if the library
+/// currently being viewed was just hidden, drop to Home.
+pub fn handle_sidebar_edit_mode_exited(app: &mut App, sender: &ComponentSender<App>) {
+    let hidden = app.settings.library_visibility.hidden.clone();
+    app.home_view
+        .emit(HomeViewMsg::SetVisibility(hidden.clone()));
+    // If the library being viewed was just hidden, drop to Home.
+    // Key by the browsed source's own type + id (not a hardcoded
+    // "plex") so per-source visibility resolves for any backend.
+    let redirect = match (&app.current_view, &app.browsed_source) {
+        (CurrentView::Library(key), Some((source_type, source_id))) => hidden.contains(
+            &LibrarySection::visibility_key_for(source_type.as_str(), source_id, key),
+        ),
+        _ => false,
+    };
+    if redirect {
+        sender.input(AppMsg::NavigateHome);
+    } else if matches!(app.current_view, CurrentView::Home) {
+        // Refresh Home in place so it reflects the new visibility.
+        let in_progress = load_in_progress(&app.db);
+        app.home_view.emit(HomeViewMsg::LoadHome { in_progress });
+    }
+}
+
+/// Handle OpenDownloadDetail: resolve a download's stored `media_item_id` to a
+/// library `MediaItem` (an episode routes to its parent show) and open the
+/// matching detail page, or toast if it can't be resolved offline.
+pub fn handle_open_download_detail(
+    app: &mut App,
+    media_item_id: String,
+    sender: &ComponentSender<App>,
+) {
+    // Resolve the download's stored id to a library MediaItem; an
+    // episode opens its parent show's detail page.
+    let resolved = app.db.as_ref().and_then(|db| {
+        db.with(|conn| {
+            let mut repo = crate::db::media_repo::MediaRepo::new(conn);
+            let item = repo.find_by_id(&media_item_id).ok().flatten()?;
+            if item.media_type == MediaType::Episode {
+                let parent_id = item.parent_id.clone()?;
+                repo.find_by_id(&parent_id).ok().flatten()
+            } else {
+                Some(item)
+            }
+        })
+    });
+    match resolved {
+        Some(item) => match item.media_type {
+            MediaType::Movie => sender.input(AppMsg::ShowMovieDetail(item)),
+            MediaType::Show => sender.input(AppMsg::ShowShowDetail(item)),
+            _ => sender.input(AppMsg::ShowToast("Can't open this download".to_string())),
+        },
+        None => {
+            sender.input(AppMsg::ShowToast("Details unavailable offline".to_string()));
+        }
+    }
+}
+
+/// Handle MarkWatched: persist watched state locally, fire-and-forget scrobble
+/// to the owning server, patch the session cache for an instant revisit, and
+/// refresh the library view's watch data.
+pub fn handle_mark_watched(app: &mut App, item: MediaItem, sender: &ComponentSender<App>) {
+    info!("Marking as watched: {}", item.title);
+    if let Some(db) = &app.db {
+        db.with(|conn| {
+            let mut repo = WatchProgressRepo::new(conn);
+            let progress = WatchProgress {
+                media_item_id: item.id.clone(),
+                position_seconds: 0.0,
+                duration_seconds: item.runtime_minutes.map(|m| m as f64 * 60.0).unwrap_or(0.0),
+                watched: true,
+                last_watched_at: iso_now(),
+            };
+            let _ = repo.upsert(&progress);
+        });
+    }
+    // Fire-and-forget scrobble to the item's owning server.
+    if item.source_type.reports_watch_state()
+        && let Some(source) = app.sources.for_item(&item)
+    {
+        let key = item.external_id.clone();
+        sender.oneshot_command(async move {
+            if let Err(e) = source.scrobble(&key).await {
+                tracing::warn!("Scrobble failed: {e}");
+            }
+            AppCmd::Noop
+        });
+    }
+    // R8: patch cached entries so a revisit shows it immediately.
+    app.note_local_watch_mutation(&item.id, true, None);
+    // Refresh watch data
+    let watch_data = load_watch_data(&app.db);
+    app.library_view
+        .emit(LibraryViewMsg::SetWatchData(watch_data));
+    sender.input(AppMsg::ShowToast(format!(
+        "Marked \"{}\" as watched",
+        item.title
+    )));
+}
+
+/// Handle MarkUnwatched: clear watched state locally, fire-and-forget unscrobble
+/// to the owning server, patch the session cache for an instant revisit, and
+/// refresh the library view's watch data.
+pub fn handle_mark_unwatched(app: &mut App, item: MediaItem, sender: &ComponentSender<App>) {
+    info!("Marking as unwatched: {}", item.title);
+    if let Some(db) = &app.db {
+        db.with(|conn| {
+            let mut repo = WatchProgressRepo::new(conn);
+            let _ = repo.mark_unwatched(&item.id);
+        });
+    }
+    // Fire-and-forget unscrobble to the item's owning server.
+    if item.source_type.reports_watch_state()
+        && let Some(source) = app.sources.for_item(&item)
+    {
+        let key = item.external_id.clone();
+        sender.oneshot_command(async move {
+            if let Err(e) = source.unscrobble(&key).await {
+                tracing::warn!("Unscrobble failed: {e}");
+            }
+            AppCmd::Noop
+        });
+    }
+    // R8: patch cached entries so a revisit shows it immediately.
+    app.note_local_watch_mutation(&item.id, false, None);
+    // Refresh watch data
+    let watch_data = load_watch_data(&app.db);
+    app.library_view
+        .emit(LibraryViewMsg::SetWatchData(watch_data));
+    sender.input(AppMsg::ShowToast(format!(
+        "Marked \"{}\" as unwatched",
+        item.title
+    )));
+}
+
+/// Handle SourceValidated: persist the (possibly rediscovered) source config
+/// id-scoped, build + register it, make the first validated source browsed, and
+/// flush any offline-recorded progress on reconnect.
+pub fn handle_source_validated(
+    app: &mut App,
+    source: Source,
+    original_id: String,
+    is_remote: bool,
+    sender: &ComponentSender<App>,
+) {
+    let source_start = Instant::now();
+    info!(
+        "{:?} source validated: {} (url={})",
+        source.source_type, source.name, source.config.url
+    );
+
+    app.source_connecting = false;
+
+    // Id-scoped upsert: clear only THIS source's row(s) — the new id
+    // and the pre-validation id (in case a Plex URL changed) — then
+    // insert. Never delete-all: another source's saved config (and so
+    // its ability to reconnect) must survive this revalidation.
+    // Media / watch rows are NEVER touched here — eviction happens
+    // only via the explicit remove-source path (R5 / U8).
+    if let Some(db) = &app.db {
+        db.with(|conn| {
+            let mut repo = crate::db::source_repo::SourceRepo::new(conn);
+            let _ = repo.delete(&source.id);
+            if original_id != source.id {
+                let _ = repo.delete(&original_id);
+            }
+            if let Err(e) = repo.insert(&source) {
+                tracing::warn!("Failed to update source: {e}");
+            }
+        });
+    }
+
+    // Build via the factory and register. The first validated source
+    // becomes the browsed one and is wired into the views; additional
+    // sources are registered so per-item resolution and (U8/U9) the
+    // multi-source UI can reach them. `is_remote` (U2) is applied to
+    // the Plex client for the default bitrate cap (R6).
+    if let Some(built) = super::source_factory::build_source(&source, is_remote) {
+        let source_id = source.config.url.clone();
+        // Every validated source becomes its own sidebar group so
+        // all servers appear; only the first one also becomes the
+        // browsed source that drives Home + the LibraryView list.
+        let make_browsed = app.browsed_source.is_none();
+        app.feed_sidebar_source(
+            source.source_type,
+            &source_id,
+            &source.name,
+            built.clone(),
+            sender,
+        );
+        if make_browsed {
+            app.downloads_view.emit(DownloadsViewMsg::SetSource(
+                built.clone(),
+                app.artwork_cache.clone(),
+            ));
+            app.set_browsed_views(source.source_type, &source_id, built);
+        }
+    }
+
+    // Reconnect: flush any progress recorded offline back to the
+    // source before any inbound browse can surface a stale offset.
+    super::watch_events::flush_pending_sync(app, sender);
+
+    info!(
+        "Source setup took {:?} (DB save + watch data)",
+        source_start.elapsed()
+    );
+
+    // Switch home view from connecting page to shelves.
+    app.home_view.emit(HomeViewMsg::SetConnecting(false));
+    // A specific library loads when the user picks it from the
+    // sidebar; the default view is Home, so no eager load here.
+
+    // The source is live — start any queued/recovered downloads.
+    super::download_handlers::start_pending(app);
+}
+
+/// Handle LibraryRevalidated: apply a background library refetch, guarded by the
+/// stamped epochs and merged with any racing local mutation, applying in place
+/// only when that exact library is currently on screen.
+pub fn handle_library_revalidated(
+    app: &mut App,
+    cache_key: String,
+    entry_epoch: u64,
+    source_set_epoch: u64,
+    dispatch_seq: u64,
+    result: Result<Vec<MediaItem>, String>,
+) {
+    app.revalidating.remove(&cache_key);
+    // Failed refetch: leave the cached content untouched (R6).
+    let Ok(items) = result else {
+        return;
+    };
+    // Drop if the entry was evicted/superseded or the source set
+    // changed since dispatch (KTD-5 staleness guards).
+    if app.content_cache.library_epoch(&cache_key) != Some(entry_epoch)
+        || app.content_cache.source_set_changed_since(source_set_epoch)
+    {
+        return;
+    }
+    let Some(cached) = app
+        .content_cache
+        .peek_library(&cache_key)
+        .map(<[_]>::to_vec)
+    else {
+        return;
+    };
+    // Merge: server-authoritative except for a racing local mutation.
+    let merged = crate::services::library_filter::merge_revalidated(
+        items,
+        &cached,
+        &app.content_last_mutation,
+        dispatch_seq,
+    );
+    let diff = crate::services::session_cache::diff_items(&cached, &merged);
+    if diff.is_empty() {
+        // Nothing changed: leave the view (and its scroll) untouched.
+        return;
+    }
+    // Store the merged result; apply in place only if THIS library
+    // (by full composite key, not bare section key — two servers can
+    // share a section key) is on screen. Clone only when both the
+    // cache and the view need it.
+    let on_screen = matches!(
+        (&app.current_view, &app.browsed_source),
+        (CurrentView::Library(sk), Some((bt, bid)))
+            if SessionContentCache::library_key(*bt, bid, sk) == cache_key
+    );
+    if on_screen {
+        app.content_cache.put_library(&cache_key, merged.clone());
+        app.library_view.emit(LibraryViewMsg::ApplyRevalidated {
+            cache_key,
+            items: merged,
+        });
+    } else {
+        app.content_cache.put_library(&cache_key, merged);
+    }
 }
 
 #[cfg(test)]
