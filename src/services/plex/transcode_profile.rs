@@ -49,6 +49,36 @@ const DIRECT_PLAY_PROFILES: &[DirectPlayProfile] = &[
     },
 ];
 
+/// The HLS transcode output the client accepts when the server must *convert*
+/// incompatible media (as opposed to direct-play it). Without at least one
+/// `add-transcode-target`, the universal transcoder has nothing to convert *to*
+/// for the requested `protocol=hls` and returns `transcodeDecisionCode 4005`
+/// ("No conversion profile found for protocol hls") — failing the whole decision
+/// for any file that can't direct-play (e.g. 10-bit HEVC, which our bit-depth
+/// ceiling deliberately routes to a transcode). The `Generic` platform profile
+/// ships no HLS target, so we declare one explicitly.
+struct TranscodeTarget {
+    /// Streaming protocol of the output (`hls`).
+    protocol: &'static str,
+    /// Output container (`mpegts` is the canonical HLS segment container).
+    container: &'static str,
+    /// Output video codec. h264 is the conservative always-decodable target —
+    /// the server tone-maps HDR/10-bit sources down to SDR h264 we can render.
+    video_codec: &'static str,
+    /// Output audio codecs, mirroring what `playbin3` decodes so multichannel
+    /// (ac3/eac3) passes through and stereo falls back to aac/mp3.
+    audio_codec: &'static str,
+}
+
+/// HLS h264 is the single output target. One target is enough to satisfy the
+/// decision endpoint; the manual quality override (R10) covers edge cases.
+const TRANSCODE_TARGETS: &[TranscodeTarget] = &[TranscodeTarget {
+    protocol: "hls",
+    container: "mpegts",
+    video_codec: "h264",
+    audio_codec: "aac,mp3,ac3,eac3",
+}];
+
 /// An upper-bound ceiling Plex must respect or it transcodes. All current
 /// limitations are `upperBound`.
 struct Limitation {
@@ -83,13 +113,20 @@ const LIMITATIONS: &[Limitation] = &[
 /// The returned string is a query-parameter *value*; the caller (U5) percent-
 /// encodes it when building the request URL.
 pub fn client_profile_extra() -> String {
-    let mut directives: Vec<String> =
-        Vec::with_capacity(DIRECT_PLAY_PROFILES.len() + LIMITATIONS.len());
+    let mut directives: Vec<String> = Vec::with_capacity(
+        DIRECT_PLAY_PROFILES.len() + TRANSCODE_TARGETS.len() + LIMITATIONS.len(),
+    );
 
     for p in DIRECT_PLAY_PROFILES {
         directives.push(format!(
             "add-direct-play-profile(type=videoProfile&container={}&videoCodec={}&audioCodec={})",
             p.container, p.video_codecs, DIRECT_PLAY_AUDIO
+        ));
+    }
+    for t in TRANSCODE_TARGETS {
+        directives.push(format!(
+            "add-transcode-target(type=videoProfile&context=streaming&protocol={}&container={}&videoCodec={}&audioCodec={})",
+            t.protocol, t.container, t.video_codec, t.audio_codec
         ));
     }
     for l in LIMITATIONS {
@@ -112,6 +149,17 @@ mod tests {
         let extra = client_profile_extra();
         assert!(extra.contains(
             "add-direct-play-profile(type=videoProfile&container=matroska&videoCodec=h264,hevc&audioCodec=aac,mp3,ac3,eac3,flac,opus,dts,pcm)"
+        ));
+    }
+
+    #[test]
+    fn declares_hls_h264_transcode_target() {
+        // The load-bearing fix: without an HLS transcode target the decision
+        // endpoint returns 4005 ("No conversion profile found for protocol hls")
+        // and fails outright for any file that can't direct-play.
+        let extra = client_profile_extra();
+        assert!(extra.contains(
+            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264&audioCodec=aac,mp3,ac3,eac3)"
         ));
     }
 
@@ -146,8 +194,9 @@ mod tests {
         assert!(!extra.starts_with('+'));
         assert!(!extra.ends_with('+'));
         assert!(!extra.contains("++"));
-        // One directive per profile + one per limitation.
+        // One directive per profile + one per transcode target + one per limitation.
         let count = extra.matches("add-direct-play-profile").count()
+            + extra.matches("add-transcode-target").count()
             + extra.matches("add-limitation").count();
         assert_eq!(count, extra.split('+').count());
     }
@@ -166,6 +215,7 @@ mod tests {
             );
             assert!(
                 directive.starts_with("add-direct-play-profile(")
+                    || directive.starts_with("add-transcode-target(")
                     || directive.starts_with("add-limitation("),
                 "unexpected directive: {directive}"
             );

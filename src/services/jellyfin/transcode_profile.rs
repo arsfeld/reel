@@ -8,8 +8,13 @@
 //! capability ceiling deliberately mirrors `src/services/plex/transcode_profile.rs`
 //! so the two backends transcode under the same conditions: HEVC is allowed only
 //! at <= 8-bit, so 10-bit / HDR / Dolby Vision content routes to an SDR transcode
-//! rather than a washed-out direct play. The manual quality override is the
-//! safety net when this table mis-guesses.
+//! rather than a broken direct play. Bit depth — not color range — is the gate
+//! because the render path (`playbin3` -> `gtk4paintablesink`) cannot render
+//! 10-bit HEVC at all on this pipeline: a 10-bit *SDR* `main10` stream fails the
+//! same way HDR does (it was observed direct-playing then falling back to a late,
+//! stuttery server transcode citing `DirectPlayError`). Gating on bit depth
+//! catches both upfront. The manual quality override is the safety net when this
+//! mis-guesses.
 
 use serde_json::{Value, json};
 
@@ -39,7 +44,9 @@ pub fn device_profile(quality: QualitySelection, is_remote: bool) -> (Value, Opt
         .map(|kbps| kbps as u64 * 1000);
 
     // Codec ceilings mirroring the Plex profile: H.264 up to level 5.2 (4K),
-    // HEVC capped at 8-bit so HDR/Dolby Vision route to an SDR transcode.
+    // HEVC capped at 8-bit so 10-bit/HDR/Dolby Vision route to an SDR transcode.
+    // The local pipeline can't render 10-bit HEVC even when it's SDR, so bit depth
+    // (not color range) is the gate — see module doc.
     let mut codec_profiles = vec![
         json!({
             "Type": "Video",
@@ -154,9 +161,12 @@ mod tests {
         assert!(profile["TranscodingProfiles"].is_array());
         assert!(profile["CodecProfiles"].is_array());
         assert!(profile["SubtitleProfiles"].is_array());
-        // HEVC 8-bit ceiling is always present (HDR -> SDR transcode).
+        // HEVC 8-bit ceiling is always present (10-bit/HDR -> SDR transcode),
+        // mirroring Plex. The local pipeline can't render 10-bit HEVC even SDR.
         let bitdepth = conditions_for_property(&profile, "VideoBitDepth");
         assert_eq!(bitdepth.len(), 1);
         assert_eq!(bitdepth[0]["Value"], "8");
+        assert_eq!(bitdepth[0]["Condition"], "LessThanEqual");
+        assert!(conditions_for_property(&profile, "VideoRangeType").is_empty());
     }
 }
