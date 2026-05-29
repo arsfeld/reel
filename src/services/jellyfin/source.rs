@@ -9,6 +9,7 @@ use crate::models::{
     hub::MediaHub,
     library::LibrarySection,
     media::{MediaItem, SourceType},
+    playback::{PlaybackDecision, PlaybackRequest},
 };
 use crate::player::SkipMarkers;
 use crate::services::media_source::{MediaSource, SourceError};
@@ -33,6 +34,11 @@ pub struct JellyfinSource {
     /// emit `/Sessions/Playing` (start) before the first `/Progress` and
     /// `/Sessions/Playing/Stopped` to close it. Keyed by item id.
     play_sessions: Mutex<HashMap<String, String>>,
+    /// `PlaySessionId` from a transcode/direct-stream decision, keyed by item id.
+    /// When present, the progress path reuses this id and reports
+    /// `PlayMethod=Transcode`, so keepalive, progress, and stop all reference the
+    /// one session the server associated with the encoder (KTD4b).
+    transcode_sessions: Mutex<HashMap<String, String>>,
 }
 
 impl JellyfinSource {
@@ -42,6 +48,22 @@ impl JellyfinSource {
             name,
             libraries_cache: OnceLock::new(),
             play_sessions: Mutex::new(HashMap::new()),
+            transcode_sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The `PlayMethod` to report for an item: `Transcode` while a transcode
+    /// decision is active for it, else `DirectPlay`.
+    fn play_method_for(&self, rating_key: &str) -> &'static str {
+        if self
+            .transcode_sessions
+            .lock()
+            .unwrap()
+            .contains_key(rating_key)
+        {
+            "Transcode"
+        } else {
+            "DirectPlay"
         }
     }
 
@@ -151,6 +173,47 @@ impl MediaSource for JellyfinSource {
         self.client.stream_url(item_id, media_source_id)
     }
 
+    async fn resolve_playback(
+        &self,
+        req: &PlaybackRequest,
+    ) -> Result<PlaybackDecision, SourceError> {
+        let decision = self.client.resolve_decision(req).await?;
+        // Record (or clear) the transcode PlaySessionId so the progress path
+        // reuses it and reports PlayMethod=Transcode (KTD4b). A re-resolve that
+        // lands on direct-play clears any prior transcode session for the item.
+        match (&decision.session, decision.kind.is_transcode_like()) {
+            (Some(psid), true) => {
+                self.transcode_sessions
+                    .lock()
+                    .unwrap()
+                    .insert(req.rating_key.clone(), psid.clone());
+            }
+            _ => {
+                self.transcode_sessions
+                    .lock()
+                    .unwrap()
+                    .remove(&req.rating_key);
+            }
+        }
+        Ok(decision)
+    }
+
+    async fn ping_transcode(&self, session: &str) -> Result<(), SourceError> {
+        Ok(self.client.ping_session(session).await?)
+    }
+
+    async fn stop_transcode(&self, session: &str) -> Result<(), SourceError> {
+        // Kill the encoder. The /Sessions/Playing/Stopped accounting (which needs
+        // the item id) flows through report_progress("stopped"), now unified onto
+        // the same PlaySessionId.
+        self.client.stop_active_encoding(session).await?;
+        self.transcode_sessions
+            .lock()
+            .unwrap()
+            .retain(|_, v| v != session);
+        Ok(())
+    }
+
     fn artwork_url(&self, path: &str, width: u32, height: u32) -> String {
         // `path` is the descriptor "{item_id}/{image_type}/{tag}" built in
         // convert.rs. Parse defensively; fall back to a Primary image.
@@ -233,13 +296,18 @@ impl MediaSource for JellyfinSource {
     ) -> Result<(), SourceError> {
         let position_ticks = Ticks::from_ms(time_ms).0;
 
+        let play_method = self.play_method_for(rating_key);
+
         if state == "stopped" {
             // Take the session id out of the map, dropping the guard before any
-            // await. Only report stopped if we actually started a session.
+            // await. Only report stopped if we actually started a session. Also
+            // clear the transcode session so subsequent playback reverts to
+            // direct-play accounting.
             let session_id = {
                 let mut sessions = self.play_sessions.lock().unwrap();
                 sessions.remove(rating_key)
             };
+            self.transcode_sessions.lock().unwrap().remove(rating_key);
             if let Some(session_id) = session_id {
                 self.client
                     .report_stopped(rating_key, &session_id, position_ticks)
@@ -260,27 +328,35 @@ impl MediaSource for JellyfinSource {
         match existing {
             Some(session_id) => {
                 self.client
-                    .report_progress(rating_key, &session_id, position_ticks, is_paused)
+                    .report_progress(rating_key, &session_id, position_ticks, is_paused, play_method)
                     .await?;
             }
             None => {
-                // New playback: open the session with a START. Only record the
-                // session id AFTER the server accepts the start — otherwise a
-                // failed start would leave a phantom session and every later
-                // /Progress would reference a session the server never opened
-                // (Jellyfin silently drops those). Recording on success lets the
-                // next tick retry the start instead.
-                let counter = SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
-                let session_id = format!("{rating_key}-{counter}");
+                // New playback: open the session with a START. For a transcode,
+                // reuse the decision's PlaySessionId (KTD4b) so the server ties
+                // progress/keepalive/stop to the running encoder; otherwise mint
+                // a counter id. Only record the id AFTER the server accepts the
+                // start — a failed start would leave a phantom session whose
+                // later /Progress reports the server silently drops.
+                let session_id = self
+                    .transcode_sessions
+                    .lock()
+                    .unwrap()
+                    .get(rating_key)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let counter = SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        format!("{rating_key}-{counter}")
+                    });
                 self.client
-                    .report_playing(rating_key, &session_id, position_ticks)
+                    .report_playing(rating_key, &session_id, position_ticks, play_method)
                     .await?;
                 self.play_sessions
                     .lock()
                     .unwrap()
                     .insert(rating_key.to_string(), session_id.clone());
                 self.client
-                    .report_progress(rating_key, &session_id, position_ticks, is_paused)
+                    .report_progress(rating_key, &session_id, position_ticks, is_paused, play_method)
                     .await?;
             }
         }
@@ -381,5 +457,122 @@ mod tests {
         }
         .into();
         assert!(matches!(err, SourceError::Other(_)));
+    }
+
+    // --- U4: trait method wiring + PlaySessionId unification ---
+
+    use crate::models::playback::{PlaybackRequest, QualitySelection};
+    use wiremock::matchers::{body_partial_json, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn wm_source(uri: &str) -> JellyfinSource {
+        let client = JellyfinClient::new(uri, "secret-token", "user1", "device1");
+        JellyfinSource::new(client, "JF".into())
+    }
+
+    fn play_req() -> PlaybackRequest {
+        PlaybackRequest {
+            rating_key: "item9".into(),
+            part_key: "item9|src1".into(),
+            media_index: 0,
+            part_index: 0,
+            quality: QualitySelection::Auto,
+            force_transcode: false,
+            audio_stream_id: None,
+            subtitle_stream_id: None,
+            offset_secs: 0.0,
+        }
+    }
+
+    fn transcode_playback_info() -> serde_json::Value {
+        serde_json::json!({
+            "PlaySessionId": "ps-trans",
+            "MediaSources": [{
+                "Id": "src1",
+                "SupportsDirectPlay": false,
+                "SupportsDirectStream": false,
+                "SupportsTranscoding": true,
+                "TranscodingUrl": "/videos/item9/master.m3u8?api_key=secret-token",
+                "MediaStreams": [{"Index": 1, "Type": "Audio", "Codec": "aac"}]
+            }]
+        })
+    }
+
+    #[tokio::test]
+    async fn ping_transcode_pings_session() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Sessions/Playing/Ping"))
+            .and(query_param("playSessionId", "ps-trans"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let src = wm_source(&server.uri());
+        assert!(src.ping_transcode("ps-trans").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn stop_transcode_deletes_active_encoding() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/Videos/ActiveEncodings"))
+            .and(query_param("deviceId", "device1"))
+            .and(query_param("playSessionId", "ps-trans"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let src = wm_source(&server.uri());
+        assert!(src.stop_transcode("ps-trans").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn stop_transcode_treats_404_as_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/Videos/ActiveEncodings"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let src = wm_source(&server.uri());
+        assert!(src.stop_transcode("ps-gone").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn transcode_progress_reuses_decision_session_and_play_method() {
+        // After a transcode resolve, the progress START/Progress must carry the
+        // decision's PlaySessionId and PlayMethod=Transcode (KTD4b), not a
+        // counter-minted id with PlayMethod=DirectPlay.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/Items/item9/PlaybackInfo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(transcode_playback_info()))
+            .mount(&server)
+            .await;
+        // START and Progress must reference ps-trans + Transcode.
+        Mock::given(method("POST"))
+            .and(path("/Sessions/Playing"))
+            .and(body_partial_json(
+                serde_json::json!({"PlaySessionId": "ps-trans", "PlayMethod": "Transcode"}),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/Sessions/Playing/Progress"))
+            .and(body_partial_json(
+                serde_json::json!({"PlaySessionId": "ps-trans", "PlayMethod": "Transcode"}),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let src = wm_source(&server.uri());
+        let decision = src.resolve_playback(&play_req()).await.unwrap();
+        assert_eq!(decision.session.as_deref(), Some("ps-trans"));
+        // If the START/Progress bodies didn't match (wrong session or method),
+        // these calls 404 and report_progress returns Err.
+        src.report_progress("item9", "playing", 5_000, 600_000)
+            .await
+            .unwrap();
     }
 }
