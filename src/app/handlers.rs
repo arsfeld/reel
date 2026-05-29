@@ -523,8 +523,9 @@ pub(super) fn stop_active_session(app: &mut App, sender: &ComponentSender<App>) 
 }
 
 /// Stop a transcode session in the background (fire-and-forget, bounded retry in
-/// the client). Resolves the now-playing item's source; a no-op for a non-Plex
-/// source (default trait impl) or when no source is resolvable.
+/// the client). Resolves the now-playing item's source; Plex and Jellyfin
+/// override stop_transcode, while sources without a server transcoder inherit
+/// the no-op default. Also a no-op when no source is resolvable.
 fn stop_session_async(app: &App, session: String, sender: &ComponentSender<App>) {
     if let Some(source) = app.now_playing_source() {
         sender.oneshot_command(async move {
