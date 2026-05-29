@@ -52,6 +52,26 @@ impl JellyfinSource {
         }
     }
 
+    /// Append a hub from a (possibly failed) fetch, converting items and
+    /// dropping the row when the fetch errored or yielded nothing. Keeps `hubs()`
+    /// resilient to one endpoint being unavailable on older servers.
+    fn push_hub(
+        &self,
+        hubs: &mut Vec<MediaHub>,
+        title: &str,
+        identifier: &str,
+        fetched: Result<Vec<super::models::BaseItemDto>, JellyfinError>,
+    ) {
+        let items = self.convert_items(&fetched.unwrap_or_default(), None);
+        if !items.is_empty() {
+            hubs.push(MediaHub {
+                title: title.to_string(),
+                identifier: Some(identifier.to_string()),
+                items,
+            });
+        }
+    }
+
     /// The `PlayMethod` to report for an item: `Transcode` while a transcode
     /// decision is active for it, else `DirectPlay`.
     fn play_method_for(&self, rating_key: &str) -> &'static str {
@@ -277,31 +297,22 @@ impl MediaSource for JellyfinSource {
     }
 
     async fn hubs(&self) -> Result<Vec<MediaHub>, SourceError> {
-        // Minimal viable per-server hubs: Latest + Next Up. The two fetches are
-        // independent, so run them concurrently to save a full round-trip on the
-        // Home load path. Empty hubs are dropped so the home view never renders
-        // an empty shelf (mirror Plex).
-        let (latest, next_up) = tokio::join!(self.client.latest(None), self.client.next_up());
+        // Per-server discovery shelves: Latest, Next Up, and Suggested. The
+        // fetches are independent, so run them concurrently to save round-trips
+        // on the Home load path, and treat any single failure as an empty row
+        // (an older server lacking /Items/Suggestions must not blank the others).
+        // Empty hubs are dropped so the home view never renders an empty shelf,
+        // and the home view further drops hubs that duplicate core shelves
+        // (Continue Watching / Recently Added) by identifier.
+        let (latest, next_up, suggestions) = tokio::join!(
+            self.client.latest(None),
+            self.client.next_up(),
+            self.client.suggestions(),
+        );
         let mut hubs = Vec::new();
-
-        let latest_items = self.convert_items(&latest?, None);
-        if !latest_items.is_empty() {
-            hubs.push(MediaHub {
-                title: "Latest".to_string(),
-                identifier: Some("jellyfin.latest".to_string()),
-                items: latest_items,
-            });
-        }
-
-        let next_up_items = self.convert_items(&next_up?, None);
-        if !next_up_items.is_empty() {
-            hubs.push(MediaHub {
-                title: "Next Up".to_string(),
-                identifier: Some("jellyfin.nextup".to_string()),
-                items: next_up_items,
-            });
-        }
-
+        self.push_hub(&mut hubs, "Latest", "jellyfin.latest", latest);
+        self.push_hub(&mut hubs, "Next Up", "jellyfin.nextup", next_up);
+        self.push_hub(&mut hubs, "Suggested", "jellyfin.suggestions", suggestions);
         Ok(hubs)
     }
 
@@ -553,6 +564,66 @@ mod tests {
             .await;
         let src = wm_source(&server.uri());
         assert!(src.stop_transcode("ps-gone").await.is_ok());
+    }
+
+    fn movie_array(id: &str) -> serde_json::Value {
+        serde_json::json!([{"Id": id, "Type": "Movie", "Name": id}])
+    }
+
+    fn movie_query(id: &str) -> serde_json::Value {
+        serde_json::json!({"Items": [{"Id": id, "Type": "Movie", "Name": id}]})
+    }
+
+    #[tokio::test]
+    async fn hubs_includes_latest_next_up_and_suggested() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Items/Latest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(movie_array("lat1")))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Shows/NextUp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(movie_query("nu1")))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Items/Suggestions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(movie_query("sug1")))
+            .mount(&server)
+            .await;
+        let src = wm_source(&server.uri());
+        let hubs = src.hubs().await.unwrap();
+        let ids: Vec<&str> = hubs.iter().filter_map(|h| h.identifier.as_deref()).collect();
+        assert!(ids.contains(&"jellyfin.latest"));
+        assert!(ids.contains(&"jellyfin.nextup"));
+        assert!(ids.contains(&"jellyfin.suggestions"));
+    }
+
+    #[tokio::test]
+    async fn hubs_resilient_when_suggestions_unavailable() {
+        // An older server returns 404 for /Items/Suggestions; the other rows
+        // must still appear (the failing row is dropped, not propagated).
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Items/Latest"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(movie_array("lat1")))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Shows/NextUp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"Items": []})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Items/Suggestions"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let src = wm_source(&server.uri());
+        let hubs = src.hubs().await.unwrap();
+        let ids: Vec<&str> = hubs.iter().filter_map(|h| h.identifier.as_deref()).collect();
+        assert_eq!(ids, vec!["jellyfin.latest"]); // next_up empty, suggestions 404 -> both dropped
     }
 
     #[test]

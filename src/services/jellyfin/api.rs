@@ -289,6 +289,20 @@ impl JellyfinClient {
         Ok(body.items)
     }
 
+    /// Suggested items for discovery. `GET /Items/Suggestions?userId=`. Older
+    /// servers may not support it; callers treat a failure as an empty row.
+    pub async fn suggestions(&self) -> Result<Vec<BaseItemDto>, JellyfinError> {
+        let url = format!(
+            "{}/Items/Suggestions?userId={}&limit=24&fields={}",
+            self.base_url,
+            self.user_id,
+            Self::item_fields()
+        );
+        let resp = self.get(&url).await?;
+        let body: QueryResult<BaseItemDto> = resp.json().await?;
+        Ok(body.items)
+    }
+
     /// Next Up across the user's shows. `GET /Shows/NextUp?userId=`.
     pub async fn next_up(&self) -> Result<Vec<BaseItemDto>, JellyfinError> {
         let url = format!("{}/Shows/NextUp?userId={}", self.base_url, self.user_id);
