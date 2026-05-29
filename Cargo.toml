@@ -17,10 +17,10 @@ gst = { version = "0.25", package = "gstreamer" }
 gst-video = { version = "0.25", package = "gstreamer-video" }
 
 # HTTP + serialization
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "form", "rustls", "webpki-roots"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1"
 
 # Database
 diesel = { version = "2.3.9", features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
@@ -34,7 +34,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 async-trait = "0.1"
 
 # Crypto (artwork cache keys)
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Error handling
 thiserror = "2"
@@ -46,11 +46,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # System
 libc = "0.2"
 futures = "0.3.32"
-mpris-server = "0.9.0"
+mpris-server = "0.10"
 
 [dev-dependencies]
 axum = "0.8"
-mockall = "0.13"
+mockall = "0.14"
 tempfile = "3"
 tokio = { version = "1", features = ["net"] }
 wiremock = "0.6"
