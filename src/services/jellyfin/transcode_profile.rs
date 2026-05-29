@@ -6,15 +6,18 @@
 //!
 //! Pure data — no GStreamer/GTK/HTTP imports (services layer is pure Rust). The
 //! capability ceiling deliberately mirrors `src/services/plex/transcode_profile.rs`
-//! so the two backends transcode under the same conditions: HEVC is allowed only
-//! at <= 8-bit, so 10-bit / HDR / Dolby Vision content routes to an SDR transcode
-//! rather than a broken direct play. Bit depth — not color range — is the gate
-//! because the render path (`playbin3` -> `gtk4paintablesink`) cannot render
-//! 10-bit HEVC at all on this pipeline: a 10-bit *SDR* `main10` stream fails the
-//! same way HDR does (it was observed direct-playing then falling back to a late,
-//! stuttery server transcode citing `DirectPlayError`). Gating on bit depth
-//! catches both upfront. The manual quality override is the safety net when this
-//! mis-guesses.
+//! so the two backends transcode under the same conditions.
+//!
+//! The HEVC gate is **capability-conditional**. Historically the gate was bit
+//! depth, not color range, because the render path (`playbin3` ->
+//! `gtk4paintablesink`) could not render 10-bit HEVC at all — a 10-bit *SDR*
+//! `main10` stream failed the same way HDR did. Now that the pipeline inserts a
+//! `glupload ! glcolorconvert` stage, 10-bit SDR renders correctly, so when the
+//! client can render 10-bit the gate switches to `VideoRangeType = SDR`: 10-bit
+//! SDR direct-plays and HDR (HDR10/HLG/Dolby Vision) still transcodes. When the
+//! client cannot render 10-bit, the conservative `VideoBitDepth <= 8` ceiling is
+//! kept and everything 10-bit transcodes. The manual quality override is the
+//! safety net.
 
 use serde_json::{Value, json};
 
@@ -37,16 +40,25 @@ pub fn effective_preset(quality: QualitySelection, is_remote: bool) -> Option<Qu
 /// resolved `MaxStreamingBitrate` in **bits/sec** (`None` = uncapped). The
 /// caller (U3) embeds the profile in the body and also sets the body-level
 /// `MaxStreamingBitrate` from the returned value.
-pub fn device_profile(quality: QualitySelection, is_remote: bool) -> (Value, Option<u64>) {
+pub fn device_profile(
+    quality: QualitySelection,
+    is_remote: bool,
+    can_direct_play_10bit: bool,
+) -> (Value, Option<u64>) {
     let preset = effective_preset(quality, is_remote);
     let max_bitrate_bps = preset
         .and_then(|p| p.max_video_bitrate_kbps())
         .map(|kbps| kbps as u64 * 1000);
 
-    // Codec ceilings mirroring the Plex profile: H.264 up to level 5.2 (4K),
-    // HEVC capped at 8-bit so 10-bit/HDR/Dolby Vision route to an SDR transcode.
-    // The local pipeline can't render 10-bit HEVC even when it's SDR, so bit depth
-    // (not color range) is the gate — see module doc.
+    // HEVC gate (mirrors Plex). When the client can render 10-bit, gate on
+    // color range so 10-bit SDR direct-plays and HDR transcodes; otherwise keep
+    // the conservative 8-bit ceiling so everything 10-bit transcodes. H.264 is
+    // always capped at level 5.2 (4K).
+    let hevc_condition = if can_direct_play_10bit {
+        json!({"Condition": "Equals", "Property": "VideoRangeType", "Value": "SDR", "IsRequired": false})
+    } else {
+        json!({"Condition": "LessThanEqual", "Property": "VideoBitDepth", "Value": "8", "IsRequired": false})
+    };
     let mut codec_profiles = vec![
         json!({
             "Type": "Video",
@@ -58,9 +70,7 @@ pub fn device_profile(quality: QualitySelection, is_remote: bool) -> (Value, Opt
         json!({
             "Type": "Video",
             "Codec": "hevc",
-            "Conditions": [
-                {"Condition": "LessThanEqual", "Property": "VideoBitDepth", "Value": "8", "IsRequired": false}
-            ]
+            "Conditions": [hevc_condition]
         }),
     ];
 
@@ -119,7 +129,7 @@ mod tests {
     #[test]
     fn original_has_no_resolution_cap_and_no_bitrate() {
         let (profile, max) =
-            device_profile(QualitySelection::Manual(QualityPreset::Original), true);
+            device_profile(QualitySelection::Manual(QualityPreset::Original), true, false);
         assert_eq!(max, None);
         assert!(profile["MaxStreamingBitrate"].is_null());
         // No Width/Height conditions for Original.
@@ -130,7 +140,7 @@ mod tests {
     #[test]
     fn manual_720p_caps_resolution_and_bitrate() {
         let (profile, max) =
-            device_profile(QualitySelection::Manual(QualityPreset::P720Mbps4), true);
+            device_profile(QualitySelection::Manual(QualityPreset::P720Mbps4), true, false);
         assert_eq!(max, Some(4_000_000));
         assert_eq!(profile["MaxStreamingBitrate"], json!(4_000_000u64));
         let widths = conditions_for_property(&profile, "Width");
@@ -142,31 +152,49 @@ mod tests {
 
     #[test]
     fn auto_remote_applies_remote_default() {
-        let (_, max) = device_profile(QualitySelection::Auto, true);
+        let (_, max) = device_profile(QualitySelection::Auto, true, false);
         // REMOTE_DEFAULT is 1080p / 8 Mbps.
         assert_eq!(max, Some(8_000_000));
     }
 
     #[test]
     fn auto_local_is_uncapped() {
-        let (profile, max) = device_profile(QualitySelection::Auto, false);
+        let (profile, max) = device_profile(QualitySelection::Auto, false, false);
         assert_eq!(max, None);
         assert!(conditions_for_property(&profile, "Width").is_empty());
     }
 
     #[test]
     fn profile_has_all_required_sections() {
-        let (profile, _) = device_profile(QualitySelection::Auto, false);
+        let (profile, _) = device_profile(QualitySelection::Auto, false, false);
         assert!(profile["DirectPlayProfiles"].is_array());
         assert!(profile["TranscodingProfiles"].is_array());
         assert!(profile["CodecProfiles"].is_array());
         assert!(profile["SubtitleProfiles"].is_array());
-        // HEVC 8-bit ceiling is always present (10-bit/HDR -> SDR transcode),
-        // mirroring Plex. The local pipeline can't render 10-bit HEVC even SDR.
+    }
+
+    #[test]
+    fn incapable_uses_bitdepth_8_ceiling() {
+        // No render capability: HEVC capped at 8-bit so all 10-bit transcodes,
+        // mirroring Plex and the pre-feature behavior.
+        let (profile, _) = device_profile(QualitySelection::Auto, false, false);
         let bitdepth = conditions_for_property(&profile, "VideoBitDepth");
         assert_eq!(bitdepth.len(), 1);
         assert_eq!(bitdepth[0]["Value"], "8");
         assert_eq!(bitdepth[0]["Condition"], "LessThanEqual");
         assert!(conditions_for_property(&profile, "VideoRangeType").is_empty());
+    }
+
+    #[test]
+    fn capable_uses_sdr_range_condition() {
+        // With render capability, the gate switches to VideoRangeType=SDR so
+        // 10-bit SDR direct-plays and HDR (non-SDR range) still transcodes.
+        let (profile, _) = device_profile(QualitySelection::Auto, false, true);
+        let range = conditions_for_property(&profile, "VideoRangeType");
+        assert_eq!(range.len(), 1);
+        assert_eq!(range[0]["Value"], "SDR");
+        assert_eq!(range[0]["Condition"], "Equals");
+        // The bit-depth ceiling must be gone — it's what blocked 10-bit SDR.
+        assert!(conditions_for_property(&profile, "VideoBitDepth").is_empty());
     }
 }
