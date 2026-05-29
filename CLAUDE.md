@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-Reel is a native Linux media player built with Rust, GTK4, Relm4, libadwaita, and GStreamer. It targets the "Infuse for Linux" experience: beautiful library UI, automatic metadata, Plex integration, and universal format support.
+Reel is a native **Plex and Jellyfin client for the GNOME desktop**, built with Rust, GTK4, Relm4, libadwaita, and GStreamer. It is **not** a generic local media player — it is a media-server client whose job is to connect to Plex/Jellyfin servers, browse their libraries, and play their content with proper watch-state sync, server-side transcoding, and offline downloads.
+
+It follows **GNOME's libadwaita design conventions** throughout: the UI should look and behave like a first-class GNOME app (adaptive layouts, libadwaita widgets/styling, GNOME HIG patterns). When adding or changing UI, prefer adwaita components and conventions over custom chrome. Local file playback exists as a convenience, but the product is defined by the server-client experience, not standalone playback.
 
 **Architecture**: Relm4 (Elm/MVU) components -> Service layer -> Backend layer (GStreamer, SQLite, HTTP APIs).
 

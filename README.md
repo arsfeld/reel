@@ -1,149 +1,72 @@
 # Reel
 
-A modern, native media player for the Linux desktop. Reel targets the "Infuse for Linux" experience: a beautiful library UI, automatic metadata, first-class Plex and Jellyfin integration, server-side transcoding, offline downloads, and universal format playback through GStreamer.
+A native Plex and Jellyfin client for the GNOME desktop.
 
-Built with **Rust**, **GTK4**, **Relm4** (Elm/MVU), **libadwaita**, and **GStreamer**.
+Reel brings your home media server to GNOME with a clean, modern interface that feels at home alongside your other apps. Connect your Plex or Jellyfin server, browse your movies and shows, and watch — with proper resume, watch-state sync, server transcoding, and offline downloads. It follows GNOME's libadwaita design conventions, so it looks and behaves like a first-class part of your desktop.
 
 > App ID: `dev.arsfeld.Reel`
 
-## Features
+## What it does
 
-### Media sources
+- **Connect your servers.** Sign in to Plex or Jellyfin (or both at once). Reel groups each server's libraries in the sidebar, and you can add, remove, enable, or disable sources individually.
+- **Browse beautifully.** A Home page with a hero carousel and shelves for Recently Added, Continue Watching, Next Up, and your server's hubs. Library views with poster grids, list mode, and adjustable poster size.
+- **Find what you want.** Sort by title, year, date added, rating, or runtime. Filter by watch status, genre, content rating, year, runtime, resolution, or HDR format. Your filters and sort order are remembered per library.
+- **Watch anything.** Universal format playback. Switch audio and subtitle tracks on the fly, with your preferred languages applied automatically. External subtitle files are picked up too.
+- **Pick up where you left off.** Resume from your last position, with watch state kept in sync with your server. Plex's own watch state stays authoritative, so progress matches across all your devices.
+- **Skip the boring parts.** Intro and credits skip markers from Plex and Jellyfin.
+- **Stream at the right quality.** Plex server-side transcoding with a quality ladder, automatic bitrate capping when you're away from home, and an in-player quality menu that shows whether you're getting Direct Play or a transcode.
+- **Take it offline.** Download movies and episodes from Plex for offline viewing, with a download queue, pause/resume, a storage budget that prunes watched items, and metadata kept so downloads stay browsable without a connection.
+- **Control it from anywhere.** MPRIS2 integration means media keys, the GNOME volume-panel media controls, and other desktop tools can play, pause, seek, and see what's playing.
 
-- **Plex Media Server** — full integration: authentication, libraries, collections, hubs, recently-added, continue-watching, metadata, child navigation, progress reporting, scrobble/unscrobble, skip markers, server-side transcode decisions, and offline downloads.
-- **Jellyfin** — full integration: authentication, libraries, box sets, hubs (Latest / Next Up), metadata, child navigation, and play-session progress reporting.
-- **Multiple sources at once** — connect several servers; the sidebar groups libraries per source and sources can be added or removed individually. Each source can be enabled/disabled.
-- **Cross-source Home** — the Home page merges *Continue Watching* across every connected source, badged by the server it came from.
+## Player controls
 
-### Playback
+Reel uses familiar, mpv-style on-screen controls — a seek bar, transport buttons, current/total time, a volume slider with mute, and a fullscreen toggle that auto-hides while you watch.
 
-Video plays through GStreamer `playbin3` with a `gtk4paintablesink`, wrapped by `PlaybackPipeline` (`src/player/gst_pipeline.rs`) and driven by the `VideoPlayer` Relm4 component.
+Keyboard shortcuts:
 
-- **Universal format support** via GStreamer.
-- **Audio & subtitle track switching** — tracks are parsed from the GStreamer `StreamCollection` and labelled with language/codec; forced-subtitle detection; external subtitle file discovery. Preferred audio/subtitle language (ISO 639-1) is applied automatically from settings.
-- **Resume playback** from the last saved position.
-- **mpv-style on-screen controls** — seek bar, transport, current/total time, volume slider with mute, fullscreen toggle, and auto-hiding chrome.
-- **Keyboard shortcuts** (mpv-compatible): Space/`k` play-pause, ←/→ ±5s, `j`/`l` ±10s, ↑/↓ ±60s, Home/`0` start, End, `m` mute, `9`/`0` volume, `f` fullscreen, Esc exit fullscreen.
-- **Skip markers** — intro / credits ranges fetched from Plex (chapters) and Jellyfin (media segments).
-
-### Transcoding & streaming
-
-- **Plex server-side transcoding** — uses Plex's universal transcoder with a quality ladder (Original → 1080p·8Mbps → 720p·4Mbps → 480p·2Mbps). Auto mode caps bitrate when remote and runs uncapped when local; manual selection overrides Auto.
-- **In-player quality menu** with a decision indicator showing whether the stream is Direct Play or transcoding (and at what resolution/bitrate), including mid-playback quality switching.
-- **Transcode session lifecycle** — unique per-session IDs, keepalive pings during playback, and explicit teardown on stop/cleanup.
-- **Stream read-ahead cache** — HTTP/HTTPS streams are buffered through GStreamer's `downloadbuffer`; the cached read-ahead region is drawn on the seek bar. Orphaned temp files are reclaimed at startup.
-
-> Jellyfin playback currently uses direct play; Plex is the source with server-side transcode support.
-
-### Library & browsing
-
-- **Home page** with a hero carousel and horizontal shelves (hubs, Latest, Recently Added, Continue Watching, Next Up), with loading/empty/error/connecting states.
-- **Library grid** with configurable poster density, grid/list view modes, per-library title and item count, and an in-grid search filter.
-- **Filters & sorting** — sort by title (A–Z / Z–A), year, date added, rating, or runtime; filter by watch status, genre, content rating, year range, runtime range, video resolution, and HDR format. Active filters show as a removable pill bar. Filter + sort state is persisted per library.
-- **Detail pages** for movies and shows — poster/backdrop, title, year, rating, runtime, overview, genres, technical metadata (resolution, codec, HDR, audio channels, container), season/episode navigation, and a watched-status toggle.
-- **Library visibility** — libraries can be hidden from the sidebar.
-
-### Offline downloads (Plex)
-
-- **Download queue** with configurable concurrency (1–4, default 2), pause/resume, and byte-range resume with ETag validation.
-- **Live progress** — byte counts and progress shown on a poster-card grid; a sidebar badge shows the active download count.
-- **Storage budget** — optional size cap with automatic pruning of watched items when exceeded; configurable download folder.
-- **Offline metadata sidecars** — poster, title, year, and season/episode are stored so downloads remain browsable offline.
-- **Failure handling** — distinct reasons (network, disk full, auth expired, source file changed, file missing) with retry/remove actions.
-
-> Downloads are currently supported for Plex sources only.
-
-### Watch state & sync
-
-- **Progress tracking** persisted locally (debounced), with a watched threshold at 90% of duration.
-- **Plex is authoritative** for watch state (offset / view count); the local database is the fallback for other sources and offline playback.
-- **Timeline & scrobble reporting** to Plex during playback; play-session reporting to Jellyfin.
-- **Offline sync queue** — progress and watched events recorded while offline are queued and dispatched on reconnect.
-
-### Desktop integration
-
-- **MPRIS2** D-Bus server (`mpris-server`): playback status, track metadata and art, and remote control (play/pause/stop/seek/set-position/volume/open-uri/raise/quit).
-
-## Tech stack
-
-| Area | Library |
+| Key | Action |
 | --- | --- |
-| UI framework | Relm4 0.11, GTK4 0.11, libadwaita 0.9 |
-| Video | GStreamer 0.25 (`playbin3` + `gtk4paintablesink`) |
-| HTTP / data | reqwest 0.12 (rustls), serde, serde_json, toml |
-| Database | diesel 2.3 (bundled SQLite) |
-| Async | tokio (multi-threaded), async-trait |
-| Desktop | mpris-server 0.9 |
+| `Space` / `k` | Play / pause |
+| `←` / `→` | Seek ∓5 seconds |
+| `j` / `l` | Seek ∓10 seconds |
+| `↑` / `↓` | Seek ∓60 seconds |
+| `Home` / `0` | Jump to start |
+| `End` | Jump to end |
+| `m` | Mute |
+| `9` / `0` | Volume down / up |
+| `f` | Toggle fullscreen |
+| `Esc` | Exit fullscreen |
 
-Data is stored in a SQLite database (media items, sources, watch progress, downloads, download groups, and a pending-sync queue). Settings persist as TOML in the platform config directory.
+## Source support at a glance
 
-## Build & run
+| Feature | Plex | Jellyfin |
+| --- | --- | --- |
+| Sign-in & libraries | ✅ | ✅ |
+| Collections / box sets | ✅ | ✅ |
+| Hubs, Latest, Continue Watching, Next Up | ✅ | ✅ |
+| Watch-state sync | ✅ (authoritative) | ✅ |
+| Skip markers (intro / credits) | ✅ | ✅ |
+| Server-side transcoding | ✅ | Direct play |
+| Offline downloads | ✅ | — |
 
-All build/run/test commands require the Nix dev shell, which provides the native dependencies (GTK4, GStreamer, etc.).
+## Installing & running
+
+Reel is built with Rust and GTK4. Development and builds use a [Nix](https://nixos.org/) dev shell that provides the native dependencies (GTK4, GStreamer, libadwaita).
 
 ```bash
-# Enter the dev shell
+# Enter the dev shell (provides all native deps)
 nix develop
 
-# Build
-nix develop -c cargo build
+# Build and run
+nix develop -c cargo run
 
-# Check without building
-nix develop -c cargo check
-
-# Run, optionally with a video file
+# Open a local video file directly
 nix develop -c cargo run -- /path/to/video.mkv
-
-# Lint & format
-nix develop -c cargo clippy
-nix develop -c cargo fmt
 ```
 
-## Testing
+Your library, sources, watch progress, and downloads are stored in a local SQLite database. Settings are kept as TOML in your platform config directory.
 
-```bash
-# Unit tests (no display needed)
-nix develop -c cargo test
+## Built with
 
-# A specific module
-nix develop -c cargo test services::watch_state
+Rust · GTK4 · Relm4 (Elm/MVU) · libadwaita · GStreamer (`playbin3`) · diesel/SQLite · tokio
 
-# GTK / GStreamer integration tests (need a virtual display)
-nix develop -c xvfb-run --auto-servernum cargo test --features integration
-```
-
-The project follows a TDD approach: business logic is extracted into pure, testable functions (parsing, state derivation, filtering, watch-state tracking), with traits at the source/repository boundaries for mocking. GStreamer and GTK interaction is confined to the `player/` and component layers.
-
-## Project layout
-
-```
-src/
-  main.rs              # Entry point
-  app/                 # Root App component (Relm4) + handlers, dialogs, watch events
-  components/
-    home/              # Hero + shelves
-    library/           # Poster grid, filters, sorting
-    detail/            # Movie & show detail pages
-    player/            # VideoPlayer component, OSD chrome, quality menu
-    sidebar.rs         # Per-source library navigation
-  player/              # PlaybackPipeline (GStreamer), tracks, subtitles, skip markers
-  services/
-    plex/              # Plex client, transcode decisions, session lifecycle
-    jellyfin/          # Jellyfin client
-    download/          # Offline download queue, transfer, pruning, sidecars
-    media_source.rs    # MediaSource trait (source boundary)
-    watch_state.rs     # Pure watch-state tracker
-    stream_cache.rs    # Read-ahead buffering
-    mpris.rs           # MPRIS2 desktop integration
-  db/                  # diesel migrations & repositories
-  models/              # Media models, SourceType
-  settings.rs          # TOML-backed settings
-```
-
-## Architectural rules
-
-1. **No GStreamer outside `player/`** — all pipeline interaction goes through `PlaybackPipeline`.
-2. **No GTK in `services/`** — the service layer is pure Rust.
-3. **No business logic in `update()`** — Relm4 `update()` methods are thin dispatchers over pure functions and service calls.
-4. **Traits at boundaries** — `MediaSource` and repository traits are mock-friendly by design.
-5. **Errors as types** — `thiserror` enums, not strings.
