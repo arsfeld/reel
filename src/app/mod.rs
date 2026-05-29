@@ -520,6 +520,9 @@ pub enum AppMsg {
     },
     /// Open the per-show download drill-in for a group id.
     OpenShowDownloads(String),
+    /// The drill-in page was popped (back/swipe/escape): drop its controller and
+    /// scope state.
+    DrilldownClosed,
     /// Begin an undoable delete of a download (shows an undo toast).
     RequestDeleteDownload {
         media_item_id: String,
@@ -789,6 +792,17 @@ impl Component for App {
         let toast_overlay = built.toast_overlay;
         let stack = built.stack;
         let nav_view = built.nav_view;
+        // Clear the drill-in's controller/state when its page is popped (back
+        // button, swipe, or Escape) so a manually-dismissed drill-in doesn't keep
+        // receiving refreshes or leave stale auto-pop state.
+        {
+            let s = sender.input_sender().clone();
+            nav_view.connect_popped(move |_nav, page| {
+                if page.tag().as_deref() == Some("drilldown") {
+                    let _ = s.send(AppMsg::DrilldownClosed);
+                }
+            });
+        }
         let split_view = built.split_view;
         let library_title = built.library_title;
         let player_chrome_revealer = built.player_chrome_revealer;
@@ -1422,6 +1436,10 @@ impl Component for App {
             }
             AppMsg::OpenShowDownloads(group_id) => {
                 self.open_show_downloads(&group_id, &sender);
+            }
+            AppMsg::DrilldownClosed => {
+                self.show_drilldown = None;
+                self.drilldown_group = None;
             }
             AppMsg::RequestDeleteDownload {
                 media_item_id,
