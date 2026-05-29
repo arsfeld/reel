@@ -8,11 +8,16 @@
 //! The supported-combo table below is the single source of truth. It was
 //! derived from the decoders `playbin3` actually has on the target machine
 //! (U1(h) probe: h264 + hevc via libav/VA-API, aac/ac3/eac3/mp3/flac/opus/dts
-//! audio, mkv/mp4/mpegts/avi demuxers) and is deliberately **efficiency-first
-//! but conservative**: HEVC is allowed only at ≤ 8-bit so 10-bit / HDR / Dolby
-//! Vision content (virtually always ≥ 10-bit) routes to a transcode-to-SDR
-//! rather than a washed-out direct play (KTD12). The manual quality override
-//! (R10) is the safety net when this table mis-guesses.
+//! audio, mkv/mp4/mpegts/avi demuxers).
+//!
+//! The HEVC bit-depth gate is **capability-conditional**. When the client can
+//! render 10-bit locally (the pipeline's `glupload ! glcolorconvert` stage), the
+//! ceiling is raised to 10-bit so 10-bit **SDR** direct-plays, and an HDR
+//! `colorTrc` exclusion keeps HDR (PQ/HLG/Dolby Vision) on the transcode path —
+//! HDR tone-mapping is hardware-conditional and handled in a follow-up. When the
+//! client cannot render 10-bit, HEVC is capped at 8-bit and everything 10-bit
+//! transcodes (the conservative default; 10-bit can't render without the convert
+//! stage). The manual quality override (R10) remains the safety net.
 
 /// Audio codecs `playbin3` decodes natively, shared across every direct-play
 /// container entry. Comma-joined per Plex's `audioCodec=` grammar.
@@ -79,43 +84,48 @@ const TRANSCODE_TARGETS: &[TranscodeTarget] = &[TranscodeTarget {
     audio_codec: "aac,mp3,ac3,eac3",
 }];
 
-/// An upper-bound ceiling Plex must respect or it transcodes. All current
-/// limitations are `upperBound`.
-struct Limitation {
-    /// The video codec the limitation scopes to.
-    scope_name: &'static str,
-    /// Plex limitation property name (e.g. `video.level`, `video.bitDepth`).
-    name: &'static str,
-    /// The inclusive upper bound.
-    value: &'static str,
+/// HDR transfer characteristics (PQ + HLG). Excluding these from HEVC keeps
+/// HDR10 / HLG / Dolby Vision on the transcode path even when 10-bit direct-play
+/// is enabled, so only *SDR* 10-bit direct-plays. (Dolby Vision is ≥ 10-bit and
+/// PQ/HLG-based, so it's covered too.)
+///
+/// NOTE: the exact `colorTrc` value names and `notMatch`/`list` grammar should
+/// be confirmed against a live Plex server — this is the documented mechanism
+/// but is the one piece of the gate not verified offline. If a server ignores
+/// it, the render-failure fallback (U4) still prevents a stuck black screen.
+const HDR_COLOR_TRC: &str = "smpte2084,arib-std-b67";
+
+/// Format an `upperBound` limitation directive (Plex transcodes anything above
+/// the bound).
+fn upper_bound(scope: &str, name: &str, value: &str) -> String {
+    format!(
+        "add-limitation(scope=videoCodec&scopeName={scope}&type=upperBound&name={name}&value={value})"
+    )
 }
 
-/// Ceilings. `video.bitDepth ≤ 8` on HEVC is the load-bearing KTD12 guard: HDR10
-/// / HLG / Dolby Vision are ≥ 10-bit, so this forces them to a tone-mapped SDR
-/// transcode. The H.264 level cap covers up to 4K (level 5.2).
-const LIMITATIONS: &[Limitation] = &[
-    Limitation {
-        scope_name: "h264",
-        name: "video.level",
-        value: "52",
-    },
-    Limitation {
-        scope_name: "hevc",
-        name: "video.bitDepth",
-        value: "8",
-    },
-];
+/// Format a `notMatch` limitation directive against a comma-separated list
+/// (Plex transcodes anything whose property matches one of the listed values).
+fn not_match_list(scope: &str, name: &str, list: &str) -> String {
+    format!(
+        "add-limitation(scope=videoCodec&scopeName={scope}&type=notMatch&name={name}&list={list})"
+    )
+}
 
 /// Build the `X-Plex-Client-Profile-Extra` value: `add-direct-play-profile(...)`
-/// entries for each supported container/codec combo, followed by
-/// `add-limitation(...)` ceilings, joined by `+`.
+/// entries for each supported container/codec combo, an `add-transcode-target`,
+/// and `add-limitation(...)` ceilings, joined by `+`.
 ///
-/// The returned string is a query-parameter *value*; the caller (U5) percent-
-/// encodes it when building the request URL.
-pub fn client_profile_extra() -> String {
-    let mut directives: Vec<String> = Vec::with_capacity(
-        DIRECT_PLAY_PROFILES.len() + TRANSCODE_TARGETS.len() + LIMITATIONS.len(),
-    );
+/// `can_direct_play_10bit` flips the HEVC bit-depth gate: when the client can
+/// render 10-bit locally (the pipeline's color-convert stage), the HEVC ceiling
+/// is raised to 10-bit so 10-bit **SDR** direct-plays, and an HDR `colorTrc`
+/// exclusion keeps HDR transcoding. When false (no convert stage), HEVC is
+/// capped at 8-bit and everything 10-bit transcodes — the conservative default.
+///
+/// The returned string is a query-parameter *value*; the caller percent-encodes
+/// it when building the request URL.
+pub fn client_profile_extra(can_direct_play_10bit: bool) -> String {
+    let mut directives: Vec<String> =
+        Vec::with_capacity(DIRECT_PLAY_PROFILES.len() + TRANSCODE_TARGETS.len() + 3);
 
     for p in DIRECT_PLAY_PROFILES {
         directives.push(format!(
@@ -129,11 +139,16 @@ pub fn client_profile_extra() -> String {
             t.protocol, t.container, t.video_codec, t.audio_codec
         ));
     }
-    for l in LIMITATIONS {
-        directives.push(format!(
-            "add-limitation(scope=videoCodec&scopeName={}&type=upperBound&name={}&value={})",
-            l.scope_name, l.name, l.value
-        ));
+
+    // H.264 level ceiling (covers up to 4K, level 5.2) — always.
+    directives.push(upper_bound("h264", "video.level", "52"));
+
+    // HEVC bit-depth gate (the load-bearing change for 10-bit direct-play).
+    if can_direct_play_10bit {
+        directives.push(upper_bound("hevc", "video.bitDepth", "10"));
+        directives.push(not_match_list("hevc", "video.colorTrc", HDR_COLOR_TRC));
+    } else {
+        directives.push(upper_bound("hevc", "video.bitDepth", "8"));
     }
 
     directives.join("+")
@@ -146,7 +161,7 @@ mod tests {
     #[test]
     fn includes_direct_play_entry_for_known_supported_combo() {
         // matroska + h264 + aac is a combo playbin3 plays natively.
-        let extra = client_profile_extra();
+        let extra = client_profile_extra(false);
         assert!(extra.contains(
             "add-direct-play-profile(type=videoProfile&container=matroska&videoCodec=h264,hevc&audioCodec=aac,mp3,ac3,eac3,flac,opus,dts,pcm)"
         ));
@@ -157,7 +172,7 @@ mod tests {
         // The load-bearing fix: without an HLS transcode target the decision
         // endpoint returns 4005 ("No conversion profile found for protocol hls")
         // and fails outright for any file that can't direct-play.
-        let extra = client_profile_extra();
+        let extra = client_profile_extra(false);
         assert!(extra.contains(
             "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264&audioCodec=aac,mp3,ac3,eac3)"
         ));
@@ -166,18 +181,17 @@ mod tests {
     #[test]
     fn encodes_h264_level_limitation() {
         // Covers R2: a level ceiling is expressed in the add-limitation grammar.
-        let extra = client_profile_extra();
+        let extra = client_profile_extra(false);
         assert!(extra.contains(
             "add-limitation(scope=videoCodec&scopeName=h264&type=upperBound&name=video.level&value=52)"
         ));
     }
 
     #[test]
-    fn hdr_dolby_vision_excluded_via_bitdepth_ceiling() {
-        // Covers R2 / KTD12: HDR & Dolby Vision are >= 10-bit, so the HEVC
-        // bitDepth<=8 ceiling forces them to transcode. No direct-play entry
-        // declares a Dolby Vision codec, and no entry lifts HEVC above 8-bit.
-        let extra = client_profile_extra();
+    fn incapable_keeps_bitdepth_8_ceiling() {
+        // Without a render capability, HEVC is capped at 8-bit so all 10-bit
+        // (SDR and HDR) transcodes — parity with the pre-feature behavior.
+        let extra = client_profile_extra(false);
         assert!(extra.contains(
             "add-limitation(scope=videoCodec&scopeName=hevc&type=upperBound&name=video.bitDepth&value=8)"
         ));
@@ -188,8 +202,34 @@ mod tests {
     }
 
     #[test]
+    fn capable_raises_bitdepth_ceiling_to_10() {
+        // With a render capability, 10-bit HEVC is allowed (so 10-bit SDR
+        // direct-plays) — the 8-bit ceiling is lifted to 10-bit.
+        let extra = client_profile_extra(true);
+        assert!(extra.contains(
+            "add-limitation(scope=videoCodec&scopeName=hevc&type=upperBound&name=video.bitDepth&value=10)"
+        ));
+        assert!(
+            !extra.contains("name=video.bitDepth&value=8)"),
+            "the 8-bit ceiling must be lifted when capable"
+        );
+    }
+
+    #[test]
+    fn capable_still_excludes_hdr_via_colortrc() {
+        // 10-bit direct-play must not let HDR through: the colorTrc exclusion
+        // keeps PQ/HLG (and Dolby Vision) on the transcode path.
+        let extra = client_profile_extra(true);
+        assert!(extra.contains(
+            "add-limitation(scope=videoCodec&scopeName=hevc&type=notMatch&name=video.colorTrc&list=smpte2084,arib-std-b67)"
+        ));
+        assert!(!extra.contains("dvhe"));
+        assert!(!extra.contains("dolbyvision"));
+    }
+
+    #[test]
     fn directives_are_plus_joined_without_trailing_separator() {
-        let extra = client_profile_extra();
+        let extra = client_profile_extra(false);
         assert!(!extra.is_empty());
         assert!(!extra.starts_with('+'));
         assert!(!extra.ends_with('+'));
@@ -204,29 +244,32 @@ mod tests {
     #[test]
     fn every_directive_has_balanced_parentheses() {
         // Guards against a malformed directive that would break server parsing.
-        let extra = client_profile_extra();
-        let opens = extra.matches('(').count();
-        let closes = extra.matches(')').count();
-        assert_eq!(opens, closes);
-        for directive in extra.split('+') {
-            assert!(
-                directive.ends_with(')'),
-                "directive not closed: {directive}"
-            );
-            assert!(
-                directive.starts_with("add-direct-play-profile(")
-                    || directive.starts_with("add-transcode-target(")
-                    || directive.starts_with("add-limitation("),
-                "unexpected directive: {directive}"
-            );
+        // Check both gate states — the capable path adds a notMatch directive.
+        for extra in [client_profile_extra(false), client_profile_extra(true)] {
+            let opens = extra.matches('(').count();
+            let closes = extra.matches(')').count();
+            assert_eq!(opens, closes);
+            for directive in extra.split('+') {
+                assert!(
+                    directive.ends_with(')'),
+                    "directive not closed: {directive}"
+                );
+                assert!(
+                    directive.starts_with("add-direct-play-profile(")
+                        || directive.starts_with("add-transcode-target(")
+                        || directive.starts_with("add-limitation("),
+                    "unexpected directive: {directive}"
+                );
+            }
         }
     }
 
     #[test]
     fn survives_percent_encoding_round_trip() {
         // The value is carried as a query parameter; confirm it round-trips
-        // through reqwest's URL query encoding without corruption.
-        let extra = client_profile_extra();
+        // through reqwest's URL query encoding without corruption. Use the
+        // capable output (the richer string, with a comma list).
+        let extra = client_profile_extra(true);
         let mut url = reqwest::Url::parse("https://example/decision").unwrap();
         url.query_pairs_mut()
             .append_pair("X-Plex-Client-Profile-Extra", &extra);

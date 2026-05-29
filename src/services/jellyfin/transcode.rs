@@ -56,7 +56,8 @@ impl JellyfinClient {
         let item_id = req.rating_key.as_str();
         let requested_source_id = req.part_key.split_once('|').map(|(_, src)| src.to_string());
 
-        let (profile, max_bitrate_bps) = device_profile(req.quality, self.is_remote());
+        let (profile, max_bitrate_bps) =
+            device_profile(req.quality, self.is_remote(), req.can_direct_play_10bit);
         let body = self.build_body(
             req,
             requested_source_id.as_deref(),
