@@ -37,12 +37,19 @@ impl Database {
         match SqliteConnection::establish(&path) {
             Ok(mut conn) => {
                 // Tune the connection before migrating: WAL for better
-                // read/write concurrency, and a busy timeout so a transient
-                // lock waits rather than erroring immediately. (diesel already
-                // enables `foreign_keys = ON` per connection.)
-                if let Err(e) =
-                    conn.batch_execute("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")
-                {
+                // read/write concurrency, a busy timeout so a transient lock
+                // waits rather than erroring immediately, and synchronous=NORMAL
+                // — the correct pairing for WAL. Without it SQLite keeps its
+                // default synchronous=FULL, which fsyncs the WAL on *every*
+                // commit; a burst of small writes (e.g. download progress ticks,
+                // ~160/s across concurrent transfers) then stalls the GTK main
+                // thread on disk. NORMAL only fsyncs at checkpoint and is still
+                // crash-safe under WAL (no corruption; at most the last
+                // transaction is lost on power loss). (diesel already enables
+                // `foreign_keys = ON` per connection.)
+                if let Err(e) = conn.batch_execute(
+                    "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
+                ) {
                     warn!("Failed to apply SQLite pragmas: {e}");
                 }
                 if let Err(e) = init_db(&mut conn) {
