@@ -195,6 +195,18 @@ pub fn handle_video_output(
             resolve_playback_at(app, quality, position_secs, false, sender);
         }
         VideoPlayerOutput::RenderFailed { position_secs } => {
+            // Only direct-play failures fall back to transcode (U4/R4). If we're
+            // already transcoding (or direct-streaming) and the stream errors,
+            // there's nothing better to switch to — re-resolving would just loop
+            // on the same broken transcode. Leave the pipeline's error to surface
+            // on the status plate (the pre-feature behavior for transcode errors).
+            let was_direct_play = matches!(
+                app.current_decision.as_ref().map(|d| d.kind),
+                Some(crate::models::playback::PlaybackDecisionKind::DirectPlay)
+            );
+            if !was_direct_play {
+                return;
+            }
             // Direct-play couldn't render (U4/R4): fall back to a server
             // transcode for this item, bounded so a failing transcode can't loop.
             use crate::components::player::switch_state::FallbackAction;
