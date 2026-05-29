@@ -34,11 +34,12 @@ pub struct JellyfinSource {
     /// emit `/Sessions/Playing` (start) before the first `/Progress` and
     /// `/Sessions/Playing/Stopped` to close it. Keyed by item id.
     play_sessions: Mutex<HashMap<String, String>>,
-    /// `PlaySessionId` from a transcode/direct-stream decision, keyed by item id.
-    /// When present, the progress path reuses this id and reports
-    /// `PlayMethod=Transcode`, so keepalive, progress, and stop all reference the
-    /// one session the server associated with the encoder (KTD4b).
-    transcode_sessions: Mutex<HashMap<String, String>>,
+    /// `(PlaySessionId, PlayMethod)` from a transcode/direct-stream decision,
+    /// keyed by item id. When present, the progress path reuses this session id
+    /// and reports the precise `PlayMethod` (`"Transcode"` or `"DirectStream"`),
+    /// so keepalive, progress, and stop all reference the one session the server
+    /// associated with the encoder (KTD4b).
+    transcode_sessions: Mutex<HashMap<String, (String, &'static str)>>,
 }
 
 impl JellyfinSource {
@@ -72,19 +73,16 @@ impl JellyfinSource {
         }
     }
 
-    /// The `PlayMethod` to report for an item: `Transcode` while a transcode
-    /// decision is active for it, else `DirectPlay`.
+    /// The `PlayMethod` to report for an item: the stored server-side method
+    /// (`Transcode` / `DirectStream`) while such a decision is active for it,
+    /// else `DirectPlay`.
     fn play_method_for(&self, rating_key: &str) -> &'static str {
-        if self
-            .transcode_sessions
+        self.transcode_sessions
             .lock()
             .unwrap()
-            .contains_key(rating_key)
-        {
-            "Transcode"
-        } else {
-            "DirectPlay"
-        }
+            .get(rating_key)
+            .map(|(_, method)| *method)
+            .unwrap_or("DirectPlay")
     }
 
     /// Convert a slice of Jellyfin items to `MediaItem`s, dropping unsupported
@@ -221,9 +219,12 @@ impl MediaSource for JellyfinSource {
         // lands on direct-play clears any prior transcode session for the item.
         {
             let mut sessions = self.transcode_sessions.lock().unwrap();
-            match (&decision.session, decision.kind.is_transcode_like()) {
-                (Some(psid), true) => {
-                    sessions.insert(req.rating_key.clone(), psid.clone());
+            match (&decision.session, decision.kind) {
+                (Some(psid), crate::models::playback::PlaybackDecisionKind::Transcode) => {
+                    sessions.insert(req.rating_key.clone(), (psid.clone(), "Transcode"));
+                }
+                (Some(psid), crate::models::playback::PlaybackDecisionKind::DirectStream) => {
+                    sessions.insert(req.rating_key.clone(), (psid.clone(), "DirectStream"));
                 }
                 _ => {
                     sessions.remove(&req.rating_key);
@@ -245,7 +246,7 @@ impl MediaSource for JellyfinSource {
         self.transcode_sessions
             .lock()
             .unwrap()
-            .retain(|_, v| v != session);
+            .retain(|_, (psid, _)| psid != session);
         Ok(())
     }
 
@@ -375,7 +376,7 @@ impl MediaSource for JellyfinSource {
                     .lock()
                     .unwrap()
                     .get(rating_key)
-                    .cloned()
+                    .map(|(psid, _)| psid.clone())
                     .unwrap_or_else(|| {
                         let counter = SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
                         format!("{rating_key}-{counter}")
@@ -641,6 +642,50 @@ mod tests {
             .filter_map(|h| h.identifier.as_deref())
             .collect();
         assert_eq!(ids, vec!["jellyfin.latest"]); // next_up empty, suggestions 404 -> both dropped
+    }
+
+    #[tokio::test]
+    async fn direct_stream_progress_reports_play_method_direct_stream() {
+        // A remux (DirectStream) must report PlayMethod=DirectStream, not
+        // Transcode — the server distinguishes them.
+        let server = MockServer::start().await;
+        let info = serde_json::json!({
+            "PlaySessionId": "ps-remux",
+            "MediaSources": [{
+                "Id": "src1",
+                "SupportsDirectPlay": false,
+                "SupportsDirectStream": true,
+                "SupportsTranscoding": true,
+                "TranscodingUrl": "/videos/item9/master.m3u8?api_key=secret-token",
+                "MediaStreams": [{"Index": 1, "Type": "Audio", "Codec": "aac"}]
+            }]
+        });
+        Mock::given(method("POST"))
+            .and(path("/Items/item9/PlaybackInfo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(info))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/Sessions/Playing"))
+            .and(body_partial_json(
+                serde_json::json!({"PlaySessionId": "ps-remux", "PlayMethod": "DirectStream"}),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/Sessions/Playing/Progress"))
+            .and(body_partial_json(
+                serde_json::json!({"PlayMethod": "DirectStream"}),
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let src = wm_source(&server.uri());
+        src.resolve_playback(&play_req()).await.unwrap();
+        src.report_progress("item9", "playing", 5_000, 600_000)
+            .await
+            .unwrap();
     }
 
     #[test]
