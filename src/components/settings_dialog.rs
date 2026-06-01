@@ -74,13 +74,17 @@ pub fn show_preferences(
         .selected(hwdec_mode_to_index(&settings.playback.hwdec_mode))
         .build();
 
-    let hdr_model =
-        gtk::StringList::new(&["Transcode (recommended)", "Direct Play (limited color)"]);
+    let mpv_available = crate::player::capabilities::probe_mpv_available();
+    let hdr_labels = hdr_mode_labels(mpv_available);
+    let hdr_model = gtk::StringList::new(&hdr_labels);
     let hdr_combo = adw::ComboRow::builder()
-        .title("HDR Playback")
-        .subtitle("How HDR videos are handled (10-bit SDR always direct-plays)")
+        .title("HDR Output Mode")
+        .subtitle(hdr_mode_subtitle(mpv_available))
         .model(&hdr_model)
-        .selected(hdr_mode_to_index(&settings.playback.hdr_mode))
+        .selected(hdr_mode_to_index(
+            &settings.playback.hdr_mode,
+            mpv_available,
+        ))
         .build();
 
     let volume_spin = adw::SpinRow::with_range(0.0, 150.0, 5.0);
@@ -196,7 +200,7 @@ pub fn show_preferences(
         let mut updated = base.clone();
         updated.playback.resume_playback = resume_switch.is_active();
         updated.playback.hwdec_mode = index_to_hwdec_mode(hwdec_combo.selected());
-        updated.playback.hdr_mode = index_to_hdr_mode(hdr_combo.selected());
+        updated.playback.hdr_mode = index_to_hdr_mode(hdr_combo.selected(), mpv_available);
         updated.playback.default_volume = volume_spin.value();
         updated.playback.skip_short_secs = skip_short_spin.value();
         updated.playback.skip_long_secs = skip_long_spin.value();
@@ -270,18 +274,41 @@ fn index_to_hwdec_mode(index: u32) -> String {
     .to_string()
 }
 
-fn hdr_mode_to_index(mode: &str) -> u32 {
-    match mode {
-        "direct-limited" => 1,
-        // "transcode" and any unknown value -> the safe default.
-        _ => 0,
+fn hdr_mode_labels(mpv_available: bool) -> Vec<&'static str> {
+    if mpv_available {
+        vec!["Auto / Passthrough", "Force SDR Tone-mapping"]
+    } else {
+        vec!["Server Transcode to SDR"]
     }
 }
 
-fn index_to_hdr_mode(index: u32) -> String {
+fn hdr_mode_subtitle(mpv_available: bool) -> &'static str {
+    if mpv_available {
+        "How mpv renders HDR video"
+    } else {
+        "mpv HDR rendering is unavailable in this build or session"
+    }
+}
+
+fn hdr_mode_to_index(mode: &str, mpv_available: bool) -> u32 {
+    if !mpv_available {
+        return 0;
+    }
+    match mode {
+        "direct-limited" | "mpv-auto" => 0,
+        "mpv-force-sdr" | "transcode" => 1,
+        _ => 1,
+    }
+}
+
+fn index_to_hdr_mode(index: u32, mpv_available: bool) -> String {
+    if !mpv_available {
+        return "transcode".to_string();
+    }
     match index {
-        1 => "direct-limited",
-        _ => "transcode",
+        0 => "mpv-auto",
+        1 => "mpv-force-sdr",
+        _ => "mpv-force-sdr",
     }
     .to_string()
 }
@@ -300,16 +327,24 @@ mod tests {
 
     #[test]
     fn hdr_mode_roundtrip() {
-        for mode in &["transcode", "direct-limited"] {
-            let idx = hdr_mode_to_index(mode);
-            assert_eq!(index_to_hdr_mode(idx), *mode);
+        for mode in &["mpv-auto", "mpv-force-sdr"] {
+            let idx = hdr_mode_to_index(mode, true);
+            assert_eq!(index_to_hdr_mode(idx, true), *mode);
         }
     }
 
     #[test]
     fn unknown_hdr_mode_defaults_to_transcode() {
-        assert_eq!(hdr_mode_to_index("unknown"), 0);
-        assert_eq!(index_to_hdr_mode(99), "transcode");
+        assert_eq!(hdr_mode_to_index("unknown", false), 0);
+        assert_eq!(index_to_hdr_mode(99, false), "transcode");
+        assert_eq!(hdr_mode_to_index("unknown", true), 1);
+        assert_eq!(index_to_hdr_mode(99, true), "mpv-force-sdr");
+    }
+
+    #[test]
+    fn legacy_hdr_modes_map_safely_for_mpv() {
+        assert_eq!(hdr_mode_to_index("direct-limited", true), 0);
+        assert_eq!(hdr_mode_to_index("transcode", true), 1);
     }
 
     #[test]

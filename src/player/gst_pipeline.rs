@@ -216,8 +216,6 @@ impl PlaybackPipeline {
         *self.user_subtitle_override.borrow_mut() = Some(None);
     }
 
-
-
     fn send_selection(
         &self,
         audio_id: Option<&str>,
@@ -557,7 +555,11 @@ fn handle_stream_collection(
 ) -> Vec<MediaTrack> {
     let active = flags.active_stream_ids.borrow().clone();
     let mut tracks = tracks_from_collection(collection, &active);
-    apply_selection_labels(&mut tracks, &flags.active_stream_ids, &flags.subtitles_enabled);
+    apply_selection_labels(
+        &mut tracks,
+        &flags.active_stream_ids,
+        &flags.subtitles_enabled,
+    );
     *flags.tracks.borrow_mut() = tracks.clone();
 
     if !flags.subtitle_pref_applied.get() {
@@ -593,7 +595,11 @@ fn handle_streams_selected(
         .collect();
     *flags.active_stream_ids.borrow_mut() = ids.clone();
     let mut tracks = tracks_from_collection(collection, &ids);
-    apply_selection_labels(&mut tracks, &flags.active_stream_ids, &flags.subtitles_enabled);
+    apply_selection_labels(
+        &mut tracks,
+        &flags.active_stream_ids,
+        &flags.subtitles_enabled,
+    );
     *flags.tracks.borrow_mut() = tracks.clone();
     tracks
 }
@@ -606,7 +612,13 @@ fn send_selection_on_pipe(
     tracks: &[MediaTrack],
     active_stream_ids: &[String],
 ) {
-    let ids = build_stream_selection(tracks, active_stream_ids, audio_id, subtitle_id, subtitles_enabled);
+    let ids = build_stream_selection(
+        tracks,
+        active_stream_ids,
+        audio_id,
+        subtitle_id,
+        subtitles_enabled,
+    );
     if ids.is_empty() {
         return;
     }

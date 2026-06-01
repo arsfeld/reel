@@ -292,7 +292,10 @@ mod tests {
         assert_eq!(s.playback.resolved_hdr_mode(), ResolvedHdrMode::Transcode);
 
         s.playback.hdr_mode = "direct-limited".to_string();
-        assert_eq!(s.playback.resolved_hdr_mode(), ResolvedHdrMode::DirectLimited);
+        assert_eq!(
+            s.playback.resolved_hdr_mode(),
+            ResolvedHdrMode::DirectLimited
+        );
 
         s.playback.hdr_mode = "mpv-auto".to_string();
         assert_eq!(s.playback.resolved_hdr_mode(), ResolvedHdrMode::MpvAuto);

@@ -734,6 +734,8 @@ impl Component for App {
         let video_player = VideoPlayer::builder()
             .launch(VideoPlayerInit {
                 preferred_subtitle_lang: settings.subtitles.preferred_language.clone(),
+                hdr_mode: settings.playback.resolved_hdr_mode(),
+                hwdec_mode: settings.playback.hwdec_mode.clone(),
                 ..VideoPlayerInit::default()
             })
             .forward(sender.input_sender(), AppMsg::VideoOutput);

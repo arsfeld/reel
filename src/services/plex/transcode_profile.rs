@@ -247,7 +247,10 @@ mod tests {
     fn every_directive_has_balanced_parentheses() {
         // Guards against a malformed directive that would break server parsing.
         // Check both gate states — the capable path adds a notMatch directive.
-        for extra in [client_profile_extra(false, false), client_profile_extra(true, false)] {
+        for extra in [
+            client_profile_extra(false, false),
+            client_profile_extra(true, false),
+        ] {
             let opens = extra.matches('(').count();
             let closes = extra.matches(')').count();
             assert_eq!(opens, closes);

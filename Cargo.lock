@@ -2214,6 +2214,7 @@ dependencies = [
  "libadwaita",
  "libc",
  "libmpv2",
+ "libmpv2-sys",
  "libsqlite3-sys",
  "mockall",
  "mpris-server",

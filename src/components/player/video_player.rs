@@ -1,29 +1,4 @@
-//! Inline video player with a custom on-screen display.
-//!
-//! Wraps `gtk::Picture` driven by a hand-built GStreamer `playbin3`
-//! pipeline (with `gtk4paintablesink` as the video sink) and lays a
-//! libadwaita-flavoured OSD on top: a seek bar, transport buttons, time
-//! labels, a volume slider, and a fullscreen toggle. Controls fade out
-//! after a short period of pointer / keyboard inactivity, mpv-style.
-//!
-//! Standard mpv shortcuts honoured (when the player has focus):
-//!   Space / k       toggle play/pause
-//!   Left / Right    seek -5s / +5s
-//!   Shift+L/R       seek -1s / +1s
-//!   j / l           seek -10s / +10s
-//!   Up / Down       seek +60s / -60s   (mpv default)
-//!   Home / 0        seek to start
-//!   End             seek to end
-//!   m               mute toggle
-//!   9 / 0           volume down / up   (mpv uses 9/0; we also use Up/Down for seek)
-//!   f               toggle fullscreen
-//!   Esc             exit fullscreen
-//!
-//! Position polling runs at 4 Hz via `glib::timeout_add_local`. We avoid a
-//! feedback loop on the seek slider by suppressing our own programmatic
-//! updates with an `Rc<Cell<bool>>` flag — the user-driven `value-changed`
-//! emits while the flag is clear go through `UserSeek`, which seeks the
-//! underlying stream immediately.
+//! Inline video player with shared OSD controls over GStreamer or mpv surfaces.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -53,20 +28,13 @@ const HIDE_DELAY_MS: u32 = 2500;
 #[derive(Debug)]
 pub(crate) struct VideoPlayerInit {
     pub(crate) url: Option<String>,
-    /// Start playing as soon as a stream is loaded (initial URL and any
-    /// later `SetUrl`).
     pub(crate) autoplay: bool,
-    /// Saved resume position (seconds) for the initial URL. Applied once
-    /// the stream is prepared, then forgotten.
     pub(crate) resume_secs: Option<f64>,
-    /// Initial volume in `0.0..=1.0`. Restored from app config so the
-    /// user's preference survives across scenes and restarts.
     pub(crate) volume: f64,
-    /// Initial mute state, paired with `volume` so unmuting returns to
-    /// the previously chosen level.
     pub(crate) muted: bool,
-    /// Preferred subtitle language from settings (ISO 639-1).
     pub(crate) preferred_subtitle_lang: Option<String>,
+    pub(crate) hdr_mode: crate::settings::ResolvedHdrMode,
+    pub(crate) hwdec_mode: String,
 }
 
 impl Default for VideoPlayerInit {
@@ -78,6 +46,8 @@ impl Default for VideoPlayerInit {
             volume: 1.0,
             muted: false,
             preferred_subtitle_lang: None,
+            hdr_mode: crate::settings::ResolvedHdrMode::Transcode,
+            hwdec_mode: "auto-safe".to_string(),
         }
     }
 }
@@ -96,31 +66,20 @@ pub(crate) enum VideoPlayerOutput {
     },
     StateChanged(PlayState),
     EndOfFile,
-    /// User picked a quality selection (U8): re-resolve at this selection +
-    /// position.
     SelectQuality {
         selection: crate::models::playback::QualitySelection,
         position_secs: f64,
     },
-    /// A seek during an active transcode (U8/KTD2): the parent re-resolves at the
-    /// new offset rather than seeking in-pipeline.
     SeekReload {
         position_secs: f64,
     },
-    /// The pipeline reported a render/negotiation failure (U4/R4): the parent
-    /// falls back by re-resolving the same item with a forced server transcode,
-    /// resuming at `position_secs`.
     RenderFailed {
         position_secs: f64,
     },
-    /// Audio-track change during a transcode (AE6): the parent re-resolves with
-    /// the chosen Plex `audioStreamID` + reload-at-position (not a live select).
     SelectAudioTrack {
         stream_id: i64,
         position_secs: f64,
     },
-    /// Subtitle-track change during a transcode (AE6). `None` turns subtitles
-    /// off (no `subtitleStreamID`).
     SelectSubtitleTrack {
         stream_id: Option<i64>,
         position_secs: f64,
@@ -151,18 +110,12 @@ pub(crate) enum VideoPlayerMsg {
         is_transcode: bool,
         backend_kind: crate::models::playback::PlaybackBackendKind,
     },
-    /// Switch quality mid-playback (U8): emitted by the quality menu (U9). The
-    /// player captures its current content position and asks the parent to
-    /// re-resolve at the chosen selection (Auto or a manual rung).
     SelectQuality(crate::models::playback::QualitySelection),
     Clear,
     SetAutoplay(bool),
-    /// 4 Hz timer poll: refresh slider + labels from the media stream.
     Tick,
     TogglePlay,
-    /// Seek by N seconds, clamped to [0, duration].
     SeekRelative(i64),
-    /// Seek to a fraction of the duration.
     SeekFraction(f64),
     UserSeek(i64),
     SeekAbsolute(f64),
@@ -171,10 +124,7 @@ pub(crate) enum VideoPlayerMsg {
     ToggleMute,
     ToggleFullscreen,
     ExitFullscreen,
-    /// Pointer moved or a key was pressed — extend the controls' visible
-    /// window.
     PointerActive,
-    /// Inactivity timer fired — hide controls if not interacting.
     HideControls,
     KeyPressed(gtk::gdk::Key, gtk::gdk::ModifierType),
     SetSpeed(f64),
@@ -185,16 +135,9 @@ pub(crate) enum VideoPlayerMsg {
     TracksChanged(Vec<MediaTrack>),
     SelectAudio(String),
     SelectSubtitle(Option<String>),
-    /// Audio/subtitle track picked from the transcode-aware menu (AE6): carries
-    /// the Plex stream id, routed to a re-decision by the parent.
     SelectAudioTrack(i64),
     SelectSubtitleTrack(Option<i64>),
     SetTitle(Option<String>),
-    /// Update the quality menu (U9): whether quality control applies to this
-    /// source, the active selection (Auto / a manual rung), and the decision
-    /// indicator text ("Direct Play" / "Transcoding 1080p · 8 Mbps", R16). The
-    /// stream lists drive the transcode-aware track menus (AE6); empty for
-    /// direct-play (live GStreamer selection wins).
     SetDecisionInfo {
         available: bool,
         selection: crate::models::playback::QualitySelection,
@@ -204,21 +147,11 @@ pub(crate) enum VideoPlayerMsg {
     },
     PopoverVisibilityChanged(bool),
     ClosePopovers,
-    /// Set intro/credits skip markers for the current media.
     SetSkipMarkers(SkipMarkers),
-    /// Seek past the intro (to intro_end_secs).
     SkipIntro,
-    /// Seek past the credits (to end of media).
     SkipCredits,
-    /// Context-aware skip: intro if in intro range, credits if in
-    /// credits range, no-op otherwise. Used by the overlay button
-    /// and the `s` keyboard shortcut.
     SkipCurrent,
-    /// Buffering progress (0-100) from the pipeline bus, for the status-plate
-    /// indicator.
     Buffering(i32),
-    /// The pipeline bus reported a render/negotiation failure (U4): ask the
-    /// parent to fall back to a server transcode for the current item.
     RenderFailed,
 }
 
@@ -234,13 +167,8 @@ struct PlaybackFlags {
 /// OSD reveal flags, similarly grouped.
 #[derive(Debug, Default)]
 struct OsdState {
-    /// Most recent request to reveal the OSD (driven by inactivity timer).
     show_controls: bool,
-    /// Latched copy of the most recently emitted reveal state. We diff
-    /// against this in `update_with_view` so the parent only hears about
-    /// real edge transitions, not every tick.
     controls_revealed: bool,
-    /// Track selector popover is open — keep chrome visible.
     popover_open: bool,
 }
 
@@ -253,58 +181,35 @@ pub(crate) struct VideoPlayer {
     muted: bool,
     playback: PlaybackFlags,
     is_fullscreen: bool,
-    /// Transient borderless window holding the player while in fullscreen.
-    /// `None` outside fullscreen.
     fs_window: Option<gtk::Window>,
-    /// Original parent of `root_box` to reparent back to on exit. Stored as
-    /// the inline overlay we were embedded in.
     fs_original_parent: Option<gtk::Widget>,
-    /// OSD reveal-state flags (current request + most recently emitted edge).
     osd: OsdState,
     hide_source: Option<glib::SourceId>,
     tick_source: Option<glib::SourceId>,
-    /// Flag set while we update the seek scale programmatically so the
-    /// `value-changed` handler can ignore our own writes.
     suppress_scale: Rc<Cell<bool>>,
     suppress_volume: Rc<Cell<bool>>,
-    /// Timestamp of the most recent user-driven seek slider change. Used
-    /// by `refresh_widgets` to suppress pushing polled positions onto the
-    /// thumb for a brief window after the user touches it — without this
-    /// the thumb visibly skips backward to GStreamer's SNAP_BEFORE
-    /// keyframe in between drag updates.
     last_user_seek: Rc<Cell<Option<Instant>>>,
     resume_pending: Option<f64>,
-    /// Content-time offset of the current transcode stream (U8). playbin3
-    /// reports a 0-based position on an offset-built transcode while reporting
-    /// the full duration, so this is added back for the displayed position /
-    /// seek bar / scrobble. 0 for direct-play.
     transcode_base_offset_us: i64,
-    /// Whether the current stream is a server transcode: seeks reload at a new
-    /// offset (via the parent) rather than seeking in-pipeline (KTD2).
     is_transcode: bool,
     preferred_subtitle_lang: Option<String>,
+    #[cfg_attr(not(feature = "mpv"), allow(dead_code))]
+    hdr_mode: crate::settings::ResolvedHdrMode,
+    #[cfg_attr(not(feature = "mpv"), allow(dead_code))]
+    hwdec_mode: String,
     tracks: Vec<MediaTrack>,
     title: Option<String>,
     track_ui_signature: String,
-    /// Skip intro / credits markers for the current media. `None` until
-    /// set by the parent (e.g. from Plex metadata).
     skip_markers: Option<SkipMarkers>,
-    /// Buffering percent (0-100) while a network rebuffer/fill is active;
-    /// `None` once filled (>= 100) or never buffering. Drives the status
-    /// plate and suppresses poll-derived state flicker during buffering.
     buffering_percent: Option<i32>,
-    /// Quality menu state (U9). `quality_available` gates the menu's
-    /// sensitivity (only Plex sources can re-decide); `current_selection` is
-    /// the active radio item; `decision_indicator` is the R16 indicator text.
     quality_available: bool,
     current_selection: crate::models::playback::QualitySelection,
     decision_indicator: String,
     quality_ui_signature: String,
-    /// Transcode-aware track menus (AE6): the Plex audio/subtitle stream lists
-    /// from the active decision. While transcoding these drive the track menus
-    /// (a change re-decides); empty for direct-play (live GStreamer selection).
     transcode_audio: Vec<crate::models::playback::DecisionStream>,
     transcode_subtitle: Vec<crate::models::playback::DecisionStream>,
+    #[cfg(feature = "mpv")]
+    mpv_render: Rc<std::cell::RefCell<Option<crate::player::mpv_backend::MpvRenderBridge>>>,
 }
 
 #[relm4::component(pub(crate))]
@@ -328,29 +233,36 @@ impl Component for VideoPlayer {
                 set_hexpand: true,
                 set_vexpand: true,
 
-                // Wrap the GtkPicture in a GtkGraphicsOffload (4.14+) so
-                // the video paintable is composited directly by the
-                // Wayland compositor instead of going through GSK every
-                // frame — same trick GtkVideo uses internally. Without
-                // this, decoded frames hit GTK's normal render pass and
-                // playback stutters under load.
-                #[wrap(Some)]
-                set_child = &gtk::GraphicsOffload {
-                    set_enabled: gtk::GraphicsOffloadEnabled::Enabled,
+                #[name = "surface_stack"]
+                gtk::Stack {
+                    set_hexpand: true,
+                    set_vexpand: true,
 
-                    #[wrap(Some)]
-                    #[name = "picture"]
-                    set_child = &gtk::Picture {
+                    #[name = "gstreamer_surface"]
+                    gtk::GraphicsOffload {
+                        set_enabled: gtk::GraphicsOffloadEnabled::Enabled,
+
+                        #[wrap(Some)]
+                        #[name = "picture"]
+                        set_child = &gtk::Picture {
+                            set_hexpand: true,
+                            set_vexpand: true,
+                            set_height_request: 540,
+                            set_content_fit: gtk::ContentFit::Contain,
+                            add_css_class: "video-surface",
+                        },
+                    },
+
+                    #[name = "mpv_area"]
+                    gtk::GLArea {
                         set_hexpand: true,
                         set_vexpand: true,
                         set_height_request: 540,
-                        set_content_fit: gtk::ContentFit::Contain,
+                        set_auto_render: false,
                         add_css_class: "video-surface",
                     },
                 },
 
-                // Centred big play / pause / replay glyph that flashes on
-                // state change. Hidden when controls fade out.
                 add_overlay = &gtk::Box {
                     set_halign: gtk::Align::Center,
                     set_valign: gtk::Align::Center,
@@ -365,11 +277,6 @@ impl Component for VideoPlayer {
                     },
                 },
 
-                // Loading / error plate. Shown while the pipeline is
-                // preparing (so opening a stream is visible feedback) and
-                // swapped to an error message if the pipeline fails. Not
-                // shown during seeks — playbin3 prepares fast enough that
-                // a flashing spinner during scrubbing was just noise.
                 add_overlay = &gtk::Box {
                     set_halign: gtk::Align::Center,
                     set_valign: gtk::Align::Center,
@@ -419,8 +326,6 @@ impl Component for VideoPlayer {
                     },
                 },
 
-                // Top chrome for fullscreen (back + title). Windowed mode
-                // uses the app-level titlebar synced to the same reveal flag.
                 add_overlay = &gtk::Box {
                     set_valign: gtk::Align::Start,
                     set_halign: gtk::Align::Fill,
@@ -464,10 +369,6 @@ impl Component for VideoPlayer {
                     },
                 },
 
-                // The OSD bar lives in a Revealer so we can fade it
-                // smoothly. `set_can_target: false` on the surrounding box
-                // would block clicks on the controls — we want them
-                // clickable, so leave targeting on for the inner content.
                 add_overlay = &gtk::Box {
                     set_valign: gtk::Align::End,
                     set_halign: gtk::Align::Fill,
@@ -485,7 +386,6 @@ impl Component for VideoPlayer {
                             add_css_class: "video-osd",
                             set_hexpand: true,
 
-                            // Seek bar row.
                             gtk::Box {
                                 set_orientation: gtk::Orientation::Horizontal,
                                 set_spacing: 10,
@@ -507,11 +407,6 @@ impl Component for VideoPlayer {
                                     set_hexpand: true,
                                     set_draw_value: false,
                                     set_range: (0.0, 1.0),
-                                    // Show the streaming-cache read-ahead as a
-                                    // filled "buffered" track behind the thumb.
-                                    // Don't restrict seeking to it — a forward
-                                    // seek past the buffer is allowed (it just
-                                    // needs the network).
                                     set_show_fill_level: true,
                                     set_restrict_to_fill_level: false,
                                     add_css_class: "video-osd-seek",
@@ -526,7 +421,6 @@ impl Component for VideoPlayer {
                                 },
                             },
 
-                            // Transport row.
                             gtk::Box {
                                 set_orientation: gtk::Orientation::Horizontal,
                                 set_spacing: 6,
@@ -682,10 +576,6 @@ impl Component for VideoPlayer {
                     },
                 },
 
-                // Skip intro / credits button. Positioned near the
-                // bottom-end corner so it doesn't overlap transport
-                // controls. Visibility is driven by refresh_widgets
-                // based on the current position versus SkipMarkers.
                 add_overlay = &gtk::Box {
                     set_valign: gtk::Align::End,
                     set_halign: gtk::Align::End,
@@ -725,6 +615,19 @@ impl Component for VideoPlayer {
 
         let widgets = view_output!();
 
+        #[cfg(feature = "mpv")]
+        {
+            let mpv_render = model.mpv_render.clone();
+            widgets.mpv_area.connect_render(move |area, _context| {
+                if let Some(bridge) = mpv_render.borrow().as_ref()
+                    && let Err(err) = bridge.render(area)
+                {
+                    tracing::warn!("{err}");
+                }
+                glib::Propagation::Stop
+            });
+        }
+
         wire_slider_handlers(
             &widgets,
             &sender,
@@ -758,7 +661,8 @@ impl Component for VideoPlayer {
                 resume_secs: init.resume_secs,
                 base_offset_secs: 0.0,
                 is_transcode: false,
-                backend_kind: crate::player::capabilities::PlaybackCapabilities::probe().active_backend,
+                backend_kind: crate::player::capabilities::PlaybackCapabilities::probe()
+                    .active_backend,
             });
         }
 
@@ -828,6 +732,8 @@ impl Component for VideoPlayer {
         if let Some(id) = self.hide_source.take() {
             id.remove();
         }
+        #[cfg(feature = "mpv")]
+        self.mpv_render.borrow_mut().take();
         if let Some(media) = &self.media {
             media.pause();
         }
@@ -857,8 +763,18 @@ impl VideoPlayer {
         match msg {
             VideoPlayerMsg::LoadFile(path) => {
                 let url = format!("file://{}", path);
-                let backend_kind = crate::player::capabilities::PlaybackCapabilities::probe().active_backend;
-                self.handle_set_url(widgets, &sender, Some(url), None, 0.0, false, backend_kind, Some(path));
+                let backend_kind =
+                    crate::player::capabilities::PlaybackCapabilities::probe().active_backend;
+                self.handle_set_url(
+                    widgets,
+                    &sender,
+                    Some(url),
+                    None,
+                    0.0,
+                    false,
+                    backend_kind,
+                    Some(path),
+                );
             }
             VideoPlayerMsg::SetUrl {
                 url,
@@ -964,7 +880,8 @@ impl VideoPlayer {
                 } else {
                     format!("file://{}", uri)
                 };
-                let backend_kind = crate::player::capabilities::PlaybackCapabilities::probe().active_backend;
+                let backend_kind =
+                    crate::player::capabilities::PlaybackCapabilities::probe().active_backend;
                 self.handle_set_url(
                     widgets,
                     &sender,
@@ -1112,6 +1029,8 @@ impl VideoPlayer {
             transcode_base_offset_us: 0,
             is_transcode: false,
             preferred_subtitle_lang: init.preferred_subtitle_lang.clone(),
+            hdr_mode: init.hdr_mode,
+            hwdec_mode: init.hwdec_mode.clone(),
             tracks: Vec::new(),
             title: None,
             track_ui_signature: String::new(),
@@ -1123,6 +1042,8 @@ impl VideoPlayer {
             quality_ui_signature: String::new(),
             transcode_audio: Vec::new(),
             transcode_subtitle: Vec::new(),
+            #[cfg(feature = "mpv")]
+            mpv_render: Rc::new(std::cell::RefCell::new(None)),
         }
     }
 
@@ -1335,11 +1256,7 @@ impl VideoPlayer {
                 true
             }
             Key::bracketleft | Key::bracketright => {
-                let current = self
-                    .media
-                    .as_ref()
-                    .map(|m| m.speed())
-                    .unwrap_or(1.0);
+                let current = self.media.as_ref().map(|m| m.speed()).unwrap_or(1.0);
                 let new = if key == Key::bracketleft {
                     (current - 0.1).max(0.1)
                 } else {
@@ -1444,10 +1361,15 @@ impl VideoPlayer {
         // permanently for a local file that emits no buffering messages.
         self.buffering_percent = None;
 
+        #[cfg(feature = "mpv")]
+        self.mpv_render.borrow_mut().take();
         self.media = None;
 
         let Some(url) = url else {
             widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
+            widgets
+                .surface_stack
+                .set_visible_child(&widgets.gstreamer_surface);
             // Clearing the stream (stop / leave) resets the quality menu so a
             // stale indicator doesn't linger into the next title.
             self.quality_available = false;
@@ -1496,11 +1418,56 @@ impl VideoPlayer {
                 pipeline.set_volume(self.volume);
                 pipeline.set_muted(self.muted);
                 widgets.picture.set_paintable(Some(pipeline.paintable()));
+                widgets
+                    .surface_stack
+                    .set_visible_child(&widgets.gstreamer_surface);
                 PlaybackBackend::GStreamer(pipeline)
             }
             crate::models::playback::PlaybackBackendKind::Mpv => {
-                // Will implement Mpv backend construction in U4
-                todo!("mpv backend implementation")
+                #[cfg(feature = "mpv")]
+                {
+                    let local_path_ref = local_path
+                        .as_deref()
+                        .or_else(|| url.strip_prefix("file://"));
+                    let Some(mpv) = crate::player::mpv_backend::MpvBackend::new(
+                        &url,
+                        self.playback.autoplay,
+                        self.preferred_subtitle_lang.clone(),
+                        local_path_ref,
+                        self.hdr_mode,
+                        &self.hwdec_mode,
+                        on_bus,
+                    ) else {
+                        widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
+                        let msg =
+                            "Video playback unavailable (mpv failed to initialize)".to_string();
+                        let _ = sender.output(VideoPlayerOutput::Error(msg));
+                        return;
+                    };
+
+                    mpv.set_volume(self.volume);
+                    mpv.set_muted(self.muted);
+                    widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
+                    widgets.surface_stack.set_visible_child(&widgets.mpv_area);
+                    match mpv.attach_render_context(&widgets.mpv_area) {
+                        Ok(bridge) => {
+                            *self.mpv_render.borrow_mut() = Some(bridge);
+                        }
+                        Err(err) => {
+                            let _ = sender.output(VideoPlayerOutput::Error(err));
+                            return;
+                        }
+                    }
+                    PlaybackBackend::Mpv(mpv)
+                }
+                #[cfg(not(feature = "mpv"))]
+                {
+                    widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
+                    let msg =
+                        "Video playback unavailable (mpv support is not compiled in)".to_string();
+                    let _ = sender.output(VideoPlayerOutput::Error(msg));
+                    return;
+                }
             }
         };
 

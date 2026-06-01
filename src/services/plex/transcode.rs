@@ -188,7 +188,10 @@ impl PlexClient {
         p.push(("X-Plex-Platform".into(), TRANSCODE_PLATFORM.into()));
         p.push((
             "X-Plex-Client-Profile-Extra".into(),
-            super::transcode_profile::client_profile_extra(req.can_direct_play_10bit, req.can_direct_play_hdr),
+            super::transcode_profile::client_profile_extra(
+                req.can_direct_play_10bit,
+                req.can_direct_play_hdr,
+            ),
         ));
         // Token MUST be in the query so GStreamer's segment fetches inherit it.
         p.push(("X-Plex-Token".into(), self.token().to_string()));

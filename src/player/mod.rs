@@ -3,6 +3,8 @@
 pub mod backend;
 pub mod capabilities;
 pub mod gst_pipeline;
+#[cfg(feature = "mpv")]
+pub mod mpv_backend;
 pub mod subtitles;
 pub mod tracks;
 
