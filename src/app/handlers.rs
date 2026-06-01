@@ -307,16 +307,10 @@ fn resolve_playback_at(
     // doesn't retry direct-play and re-trigger the black screen.
     let force_transcode = force_transcode || app.render_fallback.force_transcode();
     let caps = app.playback_capabilities;
-    let can_direct_play_10bit = crate::player::capabilities::can_direct_play_10bit(
-        caps,
-        quality,
-        force_transcode,
-    );
-    let can_direct_play_hdr = crate::player::capabilities::can_direct_play_hdr(
-        caps,
-        quality,
-        force_transcode,
-    );
+    let can_direct_play_10bit =
+        crate::player::capabilities::can_direct_play_10bit(caps, quality, force_transcode);
+    let can_direct_play_hdr =
+        crate::player::capabilities::can_direct_play_hdr(caps, quality, force_transcode);
     let req = crate::models::playback::PlaybackRequest {
         rating_key: item.external_id.clone(),
         part_key: item.file_path.clone().unwrap_or_default(),
@@ -1302,9 +1296,9 @@ mod tests {
 
     #[test]
     fn test_render_fallback_stickiness_integration() {
-        use crate::components::player::switch_state::{RenderFallback, FallbackAction};
-        use crate::player::capabilities::{can_direct_play_hdr, PlaybackCapabilities};
+        use crate::components::player::switch_state::{FallbackAction, RenderFallback};
         use crate::models::playback::{PlaybackBackendKind, QualitySelection};
+        use crate::player::capabilities::{PlaybackCapabilities, can_direct_play_hdr};
 
         let mut fallback = RenderFallback::new();
         fallback.begin_item("item-123");
@@ -1318,20 +1312,35 @@ mod tests {
         // Initially we can direct play HDR.
         let force_transcode = fallback.force_transcode();
         assert!(!force_transcode);
-        assert!(can_direct_play_hdr(caps, QualitySelection::Auto, force_transcode));
+        assert!(can_direct_play_hdr(
+            caps,
+            QualitySelection::Auto,
+            force_transcode
+        ));
 
         // Render fails!
-        assert_eq!(fallback.on_render_failure(), FallbackAction::RetryWithTranscode);
+        assert_eq!(
+            fallback.on_render_failure(),
+            FallbackAction::RetryWithTranscode
+        );
 
         // Now force_transcode is true and overrides direct play HDR to false.
         let force_transcode = fallback.force_transcode();
         assert!(force_transcode);
-        assert!(!can_direct_play_hdr(caps, QualitySelection::Auto, force_transcode));
+        assert!(!can_direct_play_hdr(
+            caps,
+            QualitySelection::Auto,
+            force_transcode
+        ));
 
         // Starting another item resets it.
         fallback.begin_item("item-456");
         let force_transcode = fallback.force_transcode();
         assert!(!force_transcode);
-        assert!(can_direct_play_hdr(caps, QualitySelection::Auto, force_transcode));
+        assert!(can_direct_play_hdr(
+            caps,
+            QualitySelection::Auto,
+            force_transcode
+        ));
     }
 }

@@ -1415,7 +1415,8 @@ impl VideoPlayer {
                         let position_secs = resume_secs.unwrap_or(0.0);
                         let _ = sender.output(VideoPlayerOutput::RenderFailed { position_secs });
                     } else {
-                        let msg = "Video playback unavailable (missing GStreamer plugins)".to_string();
+                        let msg =
+                            "Video playback unavailable (missing GStreamer plugins)".to_string();
                         let _ = sender.output(VideoPlayerOutput::Error(msg));
                     }
                     return;

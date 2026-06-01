@@ -233,10 +233,18 @@ mod tests {
         assert!(can_direct_play_hdr(caps, QualitySelection::Auto, false));
 
         // Covers AE1: quality Manual(Original) => HDR direct-play is true.
-        assert!(can_direct_play_hdr(caps, QualitySelection::Manual(QualityPreset::Original), false));
+        assert!(can_direct_play_hdr(
+            caps,
+            QualitySelection::Manual(QualityPreset::Original),
+            false
+        ));
 
         // Covers AE3: quality set to capped manual => HDR direct-play is false.
-        assert!(!can_direct_play_hdr(caps, QualitySelection::Manual(QualityPreset::P1080Mbps8), false));
+        assert!(!can_direct_play_hdr(
+            caps,
+            QualitySelection::Manual(QualityPreset::P1080Mbps8),
+            false
+        ));
 
         // With gst_can_render_10bit = false => HDR direct-play is false.
         let caps_incapable = PlaybackCapabilities {
@@ -244,7 +252,11 @@ mod tests {
             gst_can_render_10bit: false,
             mpv_available: false,
         };
-        assert!(!can_direct_play_hdr(caps_incapable, QualitySelection::Auto, false));
+        assert!(!can_direct_play_hdr(
+            caps_incapable,
+            QualitySelection::Auto,
+            false
+        ));
 
         // With force_transcode = true => HDR direct-play is false.
         assert!(!can_direct_play_hdr(caps, QualitySelection::Auto, true));
@@ -260,8 +272,16 @@ mod tests {
             mpv_available: true,
         };
         assert!(can_direct_play_hdr(caps, QualitySelection::Auto, false));
-        assert!(can_direct_play_hdr(caps, QualitySelection::Manual(QualityPreset::Original), false));
-        assert!(!can_direct_play_hdr(caps, QualitySelection::Manual(QualityPreset::P1080Mbps8), false));
+        assert!(can_direct_play_hdr(
+            caps,
+            QualitySelection::Manual(QualityPreset::Original),
+            false
+        ));
+        assert!(!can_direct_play_hdr(
+            caps,
+            QualitySelection::Manual(QualityPreset::P1080Mbps8),
+            false
+        ));
         assert!(!can_direct_play_hdr(caps, QualitySelection::Auto, true));
     }
 }
