@@ -123,7 +123,7 @@ fn not_match_list(scope: &str, name: &str, list: &str) -> String {
 ///
 /// The returned string is a query-parameter *value*; the caller percent-encodes
 /// it when building the request URL.
-pub fn client_profile_extra(can_direct_play_10bit: bool) -> String {
+pub fn client_profile_extra(can_direct_play_10bit: bool, can_direct_play_hdr: bool) -> String {
     let mut directives: Vec<String> =
         Vec::with_capacity(DIRECT_PLAY_PROFILES.len() + TRANSCODE_TARGETS.len() + 3);
 
@@ -146,7 +146,9 @@ pub fn client_profile_extra(can_direct_play_10bit: bool) -> String {
     // HEVC bit-depth gate (the load-bearing change for 10-bit direct-play).
     if can_direct_play_10bit {
         directives.push(upper_bound("hevc", "video.bitDepth", "10"));
-        directives.push(not_match_list("hevc", "video.colorTrc", HDR_COLOR_TRC));
+        if !can_direct_play_hdr {
+            directives.push(not_match_list("hevc", "video.colorTrc", HDR_COLOR_TRC));
+        }
     } else {
         directives.push(upper_bound("hevc", "video.bitDepth", "8"));
     }
@@ -161,7 +163,7 @@ mod tests {
     #[test]
     fn includes_direct_play_entry_for_known_supported_combo() {
         // matroska + h264 + aac is a combo playbin3 plays natively.
-        let extra = client_profile_extra(false);
+        let extra = client_profile_extra(false, false);
         assert!(extra.contains(
             "add-direct-play-profile(type=videoProfile&container=matroska&videoCodec=h264,hevc&audioCodec=aac,mp3,ac3,eac3,flac,opus,dts,pcm)"
         ));
@@ -172,7 +174,7 @@ mod tests {
         // The load-bearing fix: without an HLS transcode target the decision
         // endpoint returns 4005 ("No conversion profile found for protocol hls")
         // and fails outright for any file that can't direct-play.
-        let extra = client_profile_extra(false);
+        let extra = client_profile_extra(false, false);
         assert!(extra.contains(
             "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264&audioCodec=aac,mp3,ac3,eac3)"
         ));
@@ -181,7 +183,7 @@ mod tests {
     #[test]
     fn encodes_h264_level_limitation() {
         // Covers R2: a level ceiling is expressed in the add-limitation grammar.
-        let extra = client_profile_extra(false);
+        let extra = client_profile_extra(false, false);
         assert!(extra.contains(
             "add-limitation(scope=videoCodec&scopeName=h264&type=upperBound&name=video.level&value=52)"
         ));
@@ -191,7 +193,7 @@ mod tests {
     fn incapable_keeps_bitdepth_8_ceiling() {
         // Without a render capability, HEVC is capped at 8-bit so all 10-bit
         // (SDR and HDR) transcodes — parity with the pre-feature behavior.
-        let extra = client_profile_extra(false);
+        let extra = client_profile_extra(false, false);
         assert!(extra.contains(
             "add-limitation(scope=videoCodec&scopeName=hevc&type=upperBound&name=video.bitDepth&value=8)"
         ));
@@ -205,7 +207,7 @@ mod tests {
     fn capable_raises_bitdepth_ceiling_to_10() {
         // With a render capability, 10-bit HEVC is allowed (so 10-bit SDR
         // direct-plays) — the 8-bit ceiling is lifted to 10-bit.
-        let extra = client_profile_extra(true);
+        let extra = client_profile_extra(true, false);
         assert!(extra.contains(
             "add-limitation(scope=videoCodec&scopeName=hevc&type=upperBound&name=video.bitDepth&value=10)"
         ));
@@ -219,7 +221,7 @@ mod tests {
     fn capable_still_excludes_hdr_via_colortrc() {
         // 10-bit direct-play must not let HDR through: the colorTrc exclusion
         // keeps PQ/HLG (and Dolby Vision) on the transcode path.
-        let extra = client_profile_extra(true);
+        let extra = client_profile_extra(true, false);
         assert!(extra.contains(
             "add-limitation(scope=videoCodec&scopeName=hevc&type=notMatch&name=video.colorTrc&list=smpte2084,arib-std-b67)"
         ));
@@ -229,7 +231,7 @@ mod tests {
 
     #[test]
     fn directives_are_plus_joined_without_trailing_separator() {
-        let extra = client_profile_extra(false);
+        let extra = client_profile_extra(false, false);
         assert!(!extra.is_empty());
         assert!(!extra.starts_with('+'));
         assert!(!extra.ends_with('+'));
@@ -245,7 +247,7 @@ mod tests {
     fn every_directive_has_balanced_parentheses() {
         // Guards against a malformed directive that would break server parsing.
         // Check both gate states — the capable path adds a notMatch directive.
-        for extra in [client_profile_extra(false), client_profile_extra(true)] {
+        for extra in [client_profile_extra(false, false), client_profile_extra(true, false)] {
             let opens = extra.matches('(').count();
             let closes = extra.matches(')').count();
             assert_eq!(opens, closes);
@@ -269,7 +271,7 @@ mod tests {
         // The value is carried as a query parameter; confirm it round-trips
         // through reqwest's URL query encoding without corruption. Use the
         // capable output (the richer string, with a comma list).
-        let extra = client_profile_extra(true);
+        let extra = client_profile_extra(true, false);
         let mut url = reqwest::Url::parse("https://example/decision").unwrap();
         url.query_pairs_mut()
             .append_pair("X-Plex-Client-Profile-Extra", &extra);
@@ -279,5 +281,17 @@ mod tests {
             .map(|(_, v)| v.into_owned())
             .unwrap();
         assert_eq!(decoded, extra);
+    }
+
+    #[test]
+    fn hdr_capable_omits_colortrc_limitation() {
+        let extra = client_profile_extra(true, true);
+        assert!(extra.contains(
+            "add-limitation(scope=videoCodec&scopeName=hevc&type=upperBound&name=video.bitDepth&value=10)"
+        ));
+        assert!(
+            !extra.contains("name=video.colorTrc"),
+            "colorTrc restriction must be omitted when HDR capable"
+        );
     }
 }

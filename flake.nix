@@ -49,6 +49,7 @@
         adwaita-icon-theme
         hicolor-icon-theme
         libepoxy
+        mpv
 
         # OpenGL / EGL (may be needed by GStreamer GL sinks)
         libGL

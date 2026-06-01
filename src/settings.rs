@@ -104,6 +104,32 @@ pub struct PlaybackSettings {
     pub hdr_mode: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub enum ResolvedHdrMode {
+    #[serde(rename = "transcode")]
+    Transcode,
+    #[serde(rename = "direct-limited")]
+    DirectLimited,
+    #[serde(rename = "mpv-auto")]
+    MpvAuto,
+    #[serde(rename = "mpv-force-sdr")]
+    MpvForceSdr,
+}
+
+impl PlaybackSettings {
+    #[allow(dead_code)]
+    pub fn resolved_hdr_mode(&self) -> ResolvedHdrMode {
+        match self.hdr_mode.as_str() {
+            "direct-limited" => ResolvedHdrMode::DirectLimited,
+            "mpv-auto" => ResolvedHdrMode::MpvAuto,
+            "mpv-force-sdr" => ResolvedHdrMode::MpvForceSdr,
+            "transcode" => ResolvedHdrMode::Transcode,
+            _ => ResolvedHdrMode::Transcode,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SubtitleSettings {
@@ -254,9 +280,25 @@ mod tests {
     #[test]
     fn hdr_mode_roundtrips_through_toml() {
         let mut s = Settings::default();
+        assert_eq!(s.playback.resolved_hdr_mode(), ResolvedHdrMode::Transcode);
+
+        for mode in &["transcode", "direct-limited", "mpv-auto", "mpv-force-sdr"] {
+            s.playback.hdr_mode = mode.to_string();
+            let parsed: Settings = toml::from_str(&toml::to_string_pretty(&s).unwrap()).unwrap();
+            assert_eq!(parsed.playback.hdr_mode, *mode);
+        }
+
+        s.playback.hdr_mode = "unknown-value".to_string();
+        assert_eq!(s.playback.resolved_hdr_mode(), ResolvedHdrMode::Transcode);
+
         s.playback.hdr_mode = "direct-limited".to_string();
-        let parsed: Settings = toml::from_str(&toml::to_string_pretty(&s).unwrap()).unwrap();
-        assert_eq!(parsed.playback.hdr_mode, "direct-limited");
+        assert_eq!(s.playback.resolved_hdr_mode(), ResolvedHdrMode::DirectLimited);
+
+        s.playback.hdr_mode = "mpv-auto".to_string();
+        assert_eq!(s.playback.resolved_hdr_mode(), ResolvedHdrMode::MpvAuto);
+
+        s.playback.hdr_mode = "mpv-force-sdr".to_string();
+        assert_eq!(s.playback.resolved_hdr_mode(), ResolvedHdrMode::MpvForceSdr);
     }
 
     // --- Serialization roundtrip ---

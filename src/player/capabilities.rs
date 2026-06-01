@@ -60,6 +60,42 @@ pub(crate) fn probe_can_render_10bit() -> bool {
     make_element("glupload").is_some() && make_element("glcolorconvert").is_some()
 }
 
+#[cfg(feature = "mpv")]
+pub(crate) fn probe_mpv_available() -> bool {
+    libmpv2::Mpv::new().is_ok()
+}
+
+#[cfg(not(feature = "mpv"))]
+pub(crate) fn probe_mpv_available() -> bool {
+    false
+}
+
+use crate::models::playback::PlaybackBackendKind;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaybackCapabilities {
+    pub active_backend: PlaybackBackendKind,
+    pub gst_can_render_10bit: bool,
+    pub mpv_available: bool,
+}
+
+impl PlaybackCapabilities {
+    pub fn probe() -> Self {
+        let gst_can_render_10bit = probe_can_render_10bit();
+        let mpv_available = probe_mpv_available();
+        let active_backend = if mpv_available {
+            PlaybackBackendKind::Mpv
+        } else {
+            PlaybackBackendKind::GStreamer
+        };
+        Self {
+            active_backend,
+            gst_can_render_10bit,
+            mpv_available,
+        }
+    }
+}
+
 /// Whether to advertise 10-bit (SDR) direct-play for a request — a pure
 /// decision combining the startup probe with the user's quality choice.
 ///

@@ -148,10 +148,8 @@ pub struct App {
     /// per title.
     current_audio_stream_id: Option<i64>,
     current_subtitle_stream_id: Option<i64>,
-    /// Whether the local pipeline can render 10-bit content (probed once at
-    /// startup). Gates whether 10-bit SDR direct-play is advertised to the
-    /// server; `false` keeps everything 10-bit on the transcode path.
-    can_render_10bit: bool,
+    /// Playback capabilities (probed once at startup).
+    playback_capabilities: crate::player::capabilities::PlaybackCapabilities,
     /// Session-scoped content cache for library + Home views, so navigating back
     /// to a previously-opened view renders instantly instead of re-fetching.
     content_cache: SessionContentCache,
@@ -727,10 +725,8 @@ impl Component for App {
         // before any playback pipeline can begin writing a new one.
         reclaim_stream_cache();
 
-        // One-time render-capability probe: can the pipeline build the GL
-        // colorspace-convert stage that lets 10-bit content render? Gates
-        // whether 10-bit SDR direct-play is advertised to the server.
-        let can_render_10bit = crate::player::capabilities::probe_can_render_10bit();
+        // One-time capability probe: GStreamer capabilities and mpv availability.
+        let playback_capabilities = crate::player::capabilities::PlaybackCapabilities::probe();
 
         let settings = Settings::load();
         let (downloads, download_rx) =
@@ -987,7 +983,7 @@ impl Component for App {
             keepalive_failures: 0,
             current_audio_stream_id: None,
             current_subtitle_stream_id: None,
-            can_render_10bit,
+            playback_capabilities,
             content_cache: SessionContentCache::new(),
             content_mutation_seq: 0,
             content_last_mutation: std::collections::HashMap::new(),

@@ -188,7 +188,7 @@ impl PlexClient {
         p.push(("X-Plex-Platform".into(), TRANSCODE_PLATFORM.into()));
         p.push((
             "X-Plex-Client-Profile-Extra".into(),
-            super::transcode_profile::client_profile_extra(req.can_direct_play_10bit),
+            super::transcode_profile::client_profile_extra(req.can_direct_play_10bit, req.can_direct_play_hdr),
         ));
         // Token MUST be in the query so GStreamer's segment fetches inherit it.
         p.push(("X-Plex-Token".into(), self.token().to_string()));
@@ -424,6 +424,8 @@ mod tests {
             quality: QualitySelection::Auto,
             force_transcode: false,
             can_direct_play_10bit: false,
+            can_direct_play_hdr: false,
+            backend_kind: crate::models::playback::PlaybackBackendKind::GStreamer,
             audio_stream_id: None,
             subtitle_stream_id: None,
             offset_secs: 0.0,

@@ -518,6 +518,8 @@ mod tests {
             quality: QualitySelection::Auto,
             force_transcode: false,
             can_direct_play_10bit: false,
+            can_direct_play_hdr: false,
+            backend_kind: crate::models::playback::PlaybackBackendKind::GStreamer,
             audio_stream_id: None,
             subtitle_stream_id: None,
             offset_secs: 0.0,

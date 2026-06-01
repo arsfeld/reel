@@ -306,6 +306,17 @@ fn resolve_playback_at(
     // every re-resolve for it stays on transcode so a quality/track change
     // doesn't retry direct-play and re-trigger the black screen.
     let force_transcode = force_transcode || app.render_fallback.force_transcode();
+    let caps = app.playback_capabilities;
+    let can_direct_play_10bit = crate::player::capabilities::can_direct_play(
+        caps.gst_can_render_10bit || caps.mpv_available,
+        quality,
+        force_transcode,
+    );
+    let can_direct_play_hdr = crate::player::capabilities::can_direct_play(
+        caps.active_backend == crate::models::playback::PlaybackBackendKind::Mpv,
+        quality,
+        force_transcode,
+    );
     let req = crate::models::playback::PlaybackRequest {
         rating_key: item.external_id.clone(),
         part_key: item.file_path.clone().unwrap_or_default(),
@@ -313,11 +324,9 @@ fn resolve_playback_at(
         part_index: 0,
         quality,
         force_transcode,
-        can_direct_play_10bit: crate::player::capabilities::can_direct_play(
-            app.can_render_10bit,
-            quality,
-            force_transcode,
-        ),
+        can_direct_play_10bit,
+        can_direct_play_hdr,
+        backend_kind: caps.active_backend,
         // Carry the chosen tracks (AE6) so a quality switch preserves them.
         audio_stream_id: app.current_audio_stream_id,
         subtitle_stream_id: app.current_subtitle_stream_id,
@@ -542,6 +551,17 @@ fn begin_initial_playback(
         return;
     };
 
+    let caps = app.playback_capabilities;
+    let can_direct_play_10bit = crate::player::capabilities::can_direct_play(
+        caps.gst_can_render_10bit || caps.mpv_available,
+        crate::models::playback::QualitySelection::Auto,
+        false,
+    );
+    let can_direct_play_hdr = crate::player::capabilities::can_direct_play(
+        caps.active_backend == crate::models::playback::PlaybackBackendKind::Mpv,
+        crate::models::playback::QualitySelection::Auto,
+        false,
+    );
     let req = crate::models::playback::PlaybackRequest {
         rating_key: item.external_id.clone(),
         part_key: item.file_path.clone().unwrap_or_default(),
@@ -549,11 +569,9 @@ fn begin_initial_playback(
         part_index: 0,
         quality: crate::models::playback::QualitySelection::Auto,
         force_transcode: false,
-        can_direct_play_10bit: crate::player::capabilities::can_direct_play(
-            app.can_render_10bit,
-            crate::models::playback::QualitySelection::Auto,
-            false,
-        ),
+        can_direct_play_10bit,
+        can_direct_play_hdr,
+        backend_kind: caps.active_backend,
         audio_stream_id: None,
         subtitle_stream_id: None,
         offset_secs: resume_secs.unwrap_or(0.0),

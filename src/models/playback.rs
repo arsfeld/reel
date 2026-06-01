@@ -275,6 +275,12 @@ impl std::fmt::Debug for PlaybackDecision {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PlaybackBackendKind {
+    GStreamer,
+    Mpv,
+}
+
 /// Everything needed to ask the source to resolve a playback URL.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaybackRequest {
@@ -297,6 +303,10 @@ pub struct PlaybackRequest {
     /// capability probe gated by the quality selection; `false` keeps the
     /// conservative bit-depth ceiling (everything 10-bit transcodes).
     pub can_direct_play_10bit: bool,
+    /// Whether the client can render HDR content directly (requires mpv backend).
+    pub can_direct_play_hdr: bool,
+    /// The active playback backend.
+    pub backend_kind: PlaybackBackendKind,
     pub audio_stream_id: Option<i64>,
     pub subtitle_stream_id: Option<i64>,
     /// Part-relative resume offset in seconds.

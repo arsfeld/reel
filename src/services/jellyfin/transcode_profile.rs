@@ -44,6 +44,7 @@ pub fn device_profile(
     quality: QualitySelection,
     is_remote: bool,
     can_direct_play_10bit: bool,
+    can_direct_play_hdr: bool,
 ) -> (Value, Option<u64>) {
     let preset = effective_preset(quality, is_remote);
     let max_bitrate_bps = preset
@@ -55,7 +56,11 @@ pub fn device_profile(
     // the conservative 8-bit ceiling so everything 10-bit transcodes. H.264 is
     // always capped at level 5.2 (4K).
     let hevc_condition = if can_direct_play_10bit {
-        json!({"Condition": "Equals", "Property": "VideoRangeType", "Value": "SDR", "IsRequired": false})
+        if can_direct_play_hdr {
+            json!({"Condition": "LessThanEqual", "Property": "VideoBitDepth", "Value": "10", "IsRequired": false})
+        } else {
+            json!({"Condition": "Equals", "Property": "VideoRangeType", "Value": "SDR", "IsRequired": false})
+        }
     } else {
         json!({"Condition": "LessThanEqual", "Property": "VideoBitDepth", "Value": "8", "IsRequired": false})
     };
@@ -132,6 +137,7 @@ mod tests {
             QualitySelection::Manual(QualityPreset::Original),
             true,
             false,
+            false,
         );
         assert_eq!(max, None);
         assert!(profile["MaxStreamingBitrate"].is_null());
@@ -146,6 +152,7 @@ mod tests {
             QualitySelection::Manual(QualityPreset::P720Mbps4),
             true,
             false,
+            false,
         );
         assert_eq!(max, Some(4_000_000));
         assert_eq!(profile["MaxStreamingBitrate"], json!(4_000_000u64));
@@ -158,21 +165,21 @@ mod tests {
 
     #[test]
     fn auto_remote_applies_remote_default() {
-        let (_, max) = device_profile(QualitySelection::Auto, true, false);
+        let (_, max) = device_profile(QualitySelection::Auto, true, false, false);
         // REMOTE_DEFAULT is 1080p / 8 Mbps.
         assert_eq!(max, Some(8_000_000));
     }
 
     #[test]
     fn auto_local_is_uncapped() {
-        let (profile, max) = device_profile(QualitySelection::Auto, false, false);
+        let (profile, max) = device_profile(QualitySelection::Auto, false, false, false);
         assert_eq!(max, None);
         assert!(conditions_for_property(&profile, "Width").is_empty());
     }
 
     #[test]
     fn profile_has_all_required_sections() {
-        let (profile, _) = device_profile(QualitySelection::Auto, false, false);
+        let (profile, _) = device_profile(QualitySelection::Auto, false, false, false);
         assert!(profile["DirectPlayProfiles"].is_array());
         assert!(profile["TranscodingProfiles"].is_array());
         assert!(profile["CodecProfiles"].is_array());
@@ -183,7 +190,7 @@ mod tests {
     fn incapable_uses_bitdepth_8_ceiling() {
         // No render capability: HEVC capped at 8-bit so all 10-bit transcodes,
         // mirroring Plex and the pre-feature behavior.
-        let (profile, _) = device_profile(QualitySelection::Auto, false, false);
+        let (profile, _) = device_profile(QualitySelection::Auto, false, false, false);
         let bitdepth = conditions_for_property(&profile, "VideoBitDepth");
         assert_eq!(bitdepth.len(), 1);
         assert_eq!(bitdepth[0]["Value"], "8");
@@ -195,12 +202,24 @@ mod tests {
     fn capable_uses_sdr_range_condition() {
         // With render capability, the gate switches to VideoRangeType=SDR so
         // 10-bit SDR direct-plays and HDR (non-SDR range) still transcodes.
-        let (profile, _) = device_profile(QualitySelection::Auto, false, true);
+        let (profile, _) = device_profile(QualitySelection::Auto, false, true, false);
         let range = conditions_for_property(&profile, "VideoRangeType");
         assert_eq!(range.len(), 1);
         assert_eq!(range[0]["Value"], "SDR");
         assert_eq!(range[0]["Condition"], "Equals");
         // The bit-depth ceiling must be gone — it's what blocked 10-bit SDR.
         assert!(conditions_for_property(&profile, "VideoBitDepth").is_empty());
+    }
+
+    #[test]
+    fn hdr_capable_allows_hdr_range() {
+        let (profile, _) = device_profile(QualitySelection::Auto, false, true, true);
+        // BitDepth <= 10 condition is present
+        let bitdepth = conditions_for_property(&profile, "VideoBitDepth");
+        assert_eq!(bitdepth.len(), 1);
+        assert_eq!(bitdepth[0]["Value"], "10");
+        assert_eq!(bitdepth[0]["Condition"], "LessThanEqual");
+        // No range type condition (allows HDR and SDR)
+        assert!(conditions_for_property(&profile, "VideoRangeType").is_empty());
     }
 }

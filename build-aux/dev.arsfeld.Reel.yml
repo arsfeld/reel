@@ -48,6 +48,9 @@ modules:
   - name: reel
     buildsystem: simple
     build-commands:
+      # Build without the optional 'mpv' feature by default (remains GStreamer-only).
+      # To enable mpv, libmpv would need to be built as a flatpak module dependency
+      # and the '--features mpv' flag appended here.
       - cargo build --release --locked --manifest-path Cargo.toml
       - install -Dm755 target/release/reel /app/bin/reel
       # Mountpoint for the codecs-extra extension declared at the top level.
