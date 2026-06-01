@@ -1332,7 +1332,7 @@ impl VideoPlayer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn handle_set_url(
         &mut self,
         widgets: &mut <Self as Component>::Widgets,
@@ -1399,6 +1399,7 @@ impl VideoPlayer {
                 let local_path_ref = local_path
                     .as_deref()
                     .or_else(|| url.strip_prefix("file://"));
+                let is_local = local_path_ref.is_some();
                 let Some(pipeline) = PlaybackPipeline::new(
                     &url,
                     self.playback.autoplay,
@@ -1410,8 +1411,13 @@ impl VideoPlayer {
                     on_bus,
                 ) else {
                     widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
-                    let msg = "Video playback unavailable (missing GStreamer plugins)".to_string();
-                    let _ = sender.output(VideoPlayerOutput::Error(msg));
+                    if !is_local && !is_transcode {
+                        let position_secs = resume_secs.unwrap_or(0.0);
+                        let _ = sender.output(VideoPlayerOutput::RenderFailed { position_secs });
+                    } else {
+                        let msg = "Video playback unavailable (missing GStreamer plugins)".to_string();
+                        let _ = sender.output(VideoPlayerOutput::Error(msg));
+                    }
                     return;
                 };
 

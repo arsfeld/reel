@@ -53,6 +53,7 @@ pub(crate) struct MpvBackend {
 }
 
 impl MpvBackend {
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn new(
         url: &str,
         autoplay: bool,
@@ -98,14 +99,13 @@ impl MpvBackend {
         let _ = mpv.observe_property("cache-buffering-state", libmpv2::Format::Int64, 102);
 
         // Set up local subtitle if provided
-        if let Some(path) = local_path {
-            if let Some(sub) =
+        if let Some(path) = local_path
+            && let Some(sub) =
                 crate::player::subtitles::find_matching_subtitles(std::path::Path::new(path))
                     .first()
-            {
-                let sub_uri = format!("file://{}", sub.to_string_lossy());
-                let _ = mpv.set_property("sub-files", sub_uri);
-            }
+        {
+            let sub_uri = format!("file://{}", sub.to_string_lossy());
+            let _ = mpv.set_property("sub-files", sub_uri);
         }
 
         let inner = Rc::new(MpvInner {
@@ -140,17 +140,16 @@ impl MpvBackend {
                                 sender_clone(PlayerEvent::TracksChanged(t));
 
                                 // Apply preferred subtitle lang if available
-                                if let Some(ref lang) = preferred_subtitle_lang_clone {
-                                    if let Some(track) = inner.tracks.borrow().iter().find(|tr| {
+                                if let Some(ref lang) = preferred_subtitle_lang_clone
+                                    && let Some(track) = inner.tracks.borrow().iter().find(|tr| {
                                         tr.kind == TrackKind::Subtitle
                                             && tr.language.as_ref().is_some_and(|l| {
                                                 l.to_lowercase() == lang.to_lowercase()
                                             })
-                                    }) {
-                                        if let Ok(id) = track.stream_id.parse::<i64>() {
-                                            let _ = inner.mpv.set_property("sid", id);
-                                        }
-                                    }
+                                    })
+                                    && let Ok(id) = track.stream_id.parse::<i64>()
+                                {
+                                    let _ = inner.mpv.set_property("sid", id);
                                 }
                             }
                             libmpv2::events::Event::PropertyChange { name, change, .. } => {
