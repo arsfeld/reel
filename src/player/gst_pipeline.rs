@@ -6,7 +6,7 @@ use std::rc::Rc;
 use gst::prelude::*;
 use gtk::glib;
 
-use crate::player::pipeline_msgs::{BufferingAction, PipelineBusMsg, buffering_action};
+use crate::player::backend::PlayerEvent;
 use crate::player::subtitles::{best_matching_subtitle, find_matching_subtitles};
 use crate::player::tracks::{
     MediaTrack, TrackKind, build_stream_selection, pick_preferred_subtitle, tracks_from_collection,
@@ -28,12 +28,10 @@ pub(crate) struct PlaybackPipeline {
     /// overridden.
     wants_play: Rc<Cell<bool>>,
     error: Rc<RefCell<Option<String>>>,
-    tracks: RefCell<Vec<MediaTrack>>,
-    active_stream_ids: RefCell<Vec<String>>,
-    subtitles_enabled: Cell<bool>,
-    preferred_subtitle_lang: Option<String>,
-    subtitle_pref_applied: Cell<bool>,
-    user_subtitle_override: RefCell<Option<Option<String>>>,
+    tracks: Rc<RefCell<Vec<MediaTrack>>>,
+    active_stream_ids: Rc<RefCell<Vec<String>>>,
+    subtitles_enabled: Rc<Cell<bool>>,
+    user_subtitle_override: Rc<RefCell<Option<Option<String>>>>,
 }
 
 impl PlaybackPipeline {
@@ -43,7 +41,7 @@ impl PlaybackPipeline {
         preferred_subtitle_lang: Option<String>,
         local_path: Option<&str>,
         install_color_convert: bool,
-        sender: Rc<dyn Fn(PipelineBusMsg)>,
+        sender: Rc<dyn Fn(PlayerEvent)>,
     ) -> Option<Self> {
         let playbin = make_element("playbin3")?;
         let paintable_sink = make_element("gtk4paintablesink")?;
@@ -105,6 +103,11 @@ impl PlaybackPipeline {
         // Initial intent mirrors the requested target state.
         let wants_play = Rc::new(Cell::new(autoplay));
         let error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let tracks = Rc::new(RefCell::new(Vec::new()));
+        let active_stream_ids = Rc::new(RefCell::new(Vec::new()));
+        let subtitles_enabled = Rc::new(Cell::new(true));
+        let subtitle_pref_applied = Rc::new(Cell::new(false));
+        let user_subtitle_override = Rc::new(RefCell::new(None));
 
         let bus_watch = install_bus_watch(
             &pipeline,
@@ -115,6 +118,12 @@ impl PlaybackPipeline {
                 playing: playing.clone(),
                 wants_play: wants_play.clone(),
                 error: error.clone(),
+                tracks: tracks.clone(),
+                active_stream_ids: active_stream_ids.clone(),
+                subtitles_enabled: subtitles_enabled.clone(),
+                preferred_subtitle_lang: preferred_subtitle_lang.clone(),
+                subtitle_pref_applied: subtitle_pref_applied.clone(),
+                user_subtitle_override: user_subtitle_override.clone(),
             },
         );
 
@@ -137,12 +146,10 @@ impl PlaybackPipeline {
             playing,
             wants_play,
             error,
-            tracks: RefCell::new(Vec::new()),
-            active_stream_ids: RefCell::new(Vec::new()),
-            subtitles_enabled: Cell::new(true),
-            preferred_subtitle_lang,
-            subtitle_pref_applied: Cell::new(false),
-            user_subtitle_override: RefCell::new(None),
+            tracks,
+            active_stream_ids,
+            subtitles_enabled,
+            user_subtitle_override,
         })
     }
 
@@ -209,58 +216,7 @@ impl PlaybackPipeline {
         *self.user_subtitle_override.borrow_mut() = Some(None);
     }
 
-    pub(crate) fn handle_stream_collection(&self, collection: &gst::StreamCollection) {
-        let active = self.active_stream_ids.borrow().clone();
-        let mut tracks = tracks_from_collection(collection, &active);
-        self.apply_selection_labels(&mut tracks);
-        *self.tracks.borrow_mut() = tracks.clone();
 
-        if !self.subtitle_pref_applied.get() {
-            self.subtitle_pref_applied.set(true);
-            if self.user_subtitle_override.borrow().is_none()
-                && let Some(id) =
-                    pick_preferred_subtitle(&tracks, self.preferred_subtitle_lang.as_deref())
-            {
-                self.subtitles_enabled.set(true);
-                self.send_selection(None, Some(&id), true);
-            }
-        }
-    }
-
-    pub(crate) fn handle_streams_selected(
-        &self,
-        collection: &gst::StreamCollection,
-        streams: &[gst::Stream],
-    ) {
-        let ids: Vec<String> = streams
-            .iter()
-            .filter_map(|s| s.stream_id().map(|id| id.to_string()))
-            .collect();
-        *self.active_stream_ids.borrow_mut() = ids.clone();
-        let mut tracks = tracks_from_collection(collection, &ids);
-        self.apply_selection_labels(&mut tracks);
-        *self.tracks.borrow_mut() = tracks;
-    }
-
-    fn apply_selection_labels(&self, tracks: &mut [MediaTrack]) {
-        for track in tracks {
-            if track.kind == TrackKind::Audio {
-                track.selected = self
-                    .active_stream_ids
-                    .borrow()
-                    .iter()
-                    .any(|id| id == &track.stream_id);
-            }
-            if track.kind == TrackKind::Subtitle {
-                track.selected = self.subtitles_enabled.get()
-                    && self
-                        .active_stream_ids
-                        .borrow()
-                        .iter()
-                        .any(|id| id == &track.stream_id);
-            }
-        }
-    }
 
     fn send_selection(
         &self,
@@ -452,11 +408,17 @@ struct BusFlags {
     playing: Rc<Cell<bool>>,
     wants_play: Rc<Cell<bool>>,
     error: Rc<RefCell<Option<String>>>,
+    tracks: Rc<RefCell<Vec<MediaTrack>>>,
+    active_stream_ids: Rc<RefCell<Vec<String>>>,
+    subtitles_enabled: Rc<Cell<bool>>,
+    preferred_subtitle_lang: Option<String>,
+    subtitle_pref_applied: Rc<Cell<bool>>,
+    user_subtitle_override: Rc<RefCell<Option<Option<String>>>>,
 }
 
 fn install_bus_watch(
     pipeline: &gst::Pipeline,
-    sender: Rc<dyn Fn(PipelineBusMsg)>,
+    sender: Rc<dyn Fn(PlayerEvent)>,
     flags: BusFlags,
 ) -> Option<gst::bus::BusWatchGuard> {
     let bus = pipeline.bus().expect("pipeline has a bus");
@@ -472,7 +434,7 @@ fn handle_bus_message(
     msg: &gst::Message,
     flags: &BusFlags,
     pipeline_weak: &glib::WeakRef<gst::Pipeline>,
-    sender: &Rc<dyn Fn(PipelineBusMsg)>,
+    sender: &Rc<dyn Fn(PlayerEvent)>,
 ) {
     use gst::MessageView;
     match msg.view() {
@@ -486,13 +448,8 @@ fn handle_bus_message(
             );
             *flags.error.borrow_mut() = Some(glib_err.to_string());
             flags.seeking.set(false);
-            // A stream/negotiation/decode error means the current stream can't
-            // render (e.g. the color-convert stage couldn't negotiate). Signal a
-            // render failure so the App can fall back to a server transcode (U4).
-            // Transport errors (GstResourceError) are left to surface as the
-            // status-plate error string, not a transcode fallback.
             if is_render_failure(&glib_err) {
-                sender(PipelineBusMsg::RenderFailed);
+                sender(PlayerEvent::RenderFailed);
             }
         }
         MessageView::AsyncDone(_) => {
@@ -505,15 +462,14 @@ fn handle_bus_message(
         MessageView::StateChanged(sc) => apply_state_change(sc, flags, pipeline_weak),
         MessageView::StreamCollection(collection_msg) => {
             let collection = collection_msg.stream_collection();
-            sender(PipelineBusMsg::StreamCollection(collection));
+            let tracks = handle_stream_collection(&collection, flags, pipeline_weak);
+            sender(PlayerEvent::TracksChanged(tracks));
         }
         MessageView::StreamsSelected(selected) => {
             let collection = selected.stream_collection();
             let streams: Vec<gst::Stream> = selected.streams().collect();
-            sender(PipelineBusMsg::StreamsSelected {
-                collection,
-                streams,
-            });
+            let tracks = handle_streams_selected(&collection, &streams, flags);
+            sender(PlayerEvent::TracksChanged(tracks));
         }
         MessageView::Buffering(b) => handle_buffering(b, flags, pipeline_weak, sender),
         MessageView::DurationChanged(_) | MessageView::Eos(_) => {}
@@ -521,22 +477,18 @@ fn handle_bus_message(
     }
 }
 
-/// Mode-aware buffering handling (KTD5). The pure `buffering_action` decides
-/// the response; this only emits the indicator percent and performs the
-/// stream/queue2 pause/resume `set_state` calls. Download mode never pauses —
-/// `downloadbuffer` reads ahead while playback continues.
 fn handle_buffering(
     b: &gst::message::Buffering,
     flags: &BusFlags,
     pipeline_weak: &glib::WeakRef<gst::Pipeline>,
-    sender: &Rc<dyn Fn(PipelineBusMsg)>,
+    sender: &Rc<dyn Fn(PlayerEvent)>,
 ) {
     let percent = b.percent();
     let (mode, ..) = b.buffering_stats();
     let action = buffering_action(mode, percent, flags.wants_play.get());
 
     if action != BufferingAction::Ignore {
-        sender(PipelineBusMsg::Buffering { percent });
+        sender(PlayerEvent::Buffering(percent));
     }
 
     let new_state = match action {
@@ -548,9 +500,6 @@ fn handle_buffering(
         && let Some(pipe) = pipeline_weak.upgrade()
         && let Err(e) = pipe.set_state(state)
     {
-        // A discarded failure here can strand playback paused (a failed resume
-        // leaves wants_play true with no retry); surface it like the
-        // construction-time set_state does.
         tracing::warn!("buffering set_state({state:?}) failed: {e}");
     }
 }
@@ -576,5 +525,186 @@ fn apply_state_change(
         flags.prepared.set(true);
     } else if current == gst::State::Null || current == gst::State::Ready {
         flags.prepared.set(false);
+    }
+}
+
+fn apply_selection_labels(
+    tracks: &mut [MediaTrack],
+    active_stream_ids: &Rc<RefCell<Vec<String>>>,
+    subtitles_enabled: &Rc<Cell<bool>>,
+) {
+    for track in tracks {
+        if track.kind == TrackKind::Audio {
+            track.selected = active_stream_ids
+                .borrow()
+                .iter()
+                .any(|id| id == &track.stream_id);
+        }
+        if track.kind == TrackKind::Subtitle {
+            track.selected = subtitles_enabled.get()
+                && active_stream_ids
+                    .borrow()
+                    .iter()
+                    .any(|id| id == &track.stream_id);
+        }
+    }
+}
+
+fn handle_stream_collection(
+    collection: &gst::StreamCollection,
+    flags: &BusFlags,
+    pipeline_weak: &glib::WeakRef<gst::Pipeline>,
+) -> Vec<MediaTrack> {
+    let active = flags.active_stream_ids.borrow().clone();
+    let mut tracks = tracks_from_collection(collection, &active);
+    apply_selection_labels(&mut tracks, &flags.active_stream_ids, &flags.subtitles_enabled);
+    *flags.tracks.borrow_mut() = tracks.clone();
+
+    if !flags.subtitle_pref_applied.get() {
+        flags.subtitle_pref_applied.set(true);
+        if flags.user_subtitle_override.borrow().is_none()
+            && let Some(id) =
+                pick_preferred_subtitle(&tracks, flags.preferred_subtitle_lang.as_deref())
+        {
+            flags.subtitles_enabled.set(true);
+            if let Some(pipe) = pipeline_weak.upgrade() {
+                send_selection_on_pipe(
+                    &pipe,
+                    None,
+                    Some(&id),
+                    true,
+                    &tracks,
+                    &flags.active_stream_ids.borrow(),
+                );
+            }
+        }
+    }
+    tracks
+}
+
+fn handle_streams_selected(
+    collection: &gst::StreamCollection,
+    streams: &[gst::Stream],
+    flags: &BusFlags,
+) -> Vec<MediaTrack> {
+    let ids: Vec<String> = streams
+        .iter()
+        .filter_map(|s| s.stream_id().map(|id| id.to_string()))
+        .collect();
+    *flags.active_stream_ids.borrow_mut() = ids.clone();
+    let mut tracks = tracks_from_collection(collection, &ids);
+    apply_selection_labels(&mut tracks, &flags.active_stream_ids, &flags.subtitles_enabled);
+    *flags.tracks.borrow_mut() = tracks.clone();
+    tracks
+}
+
+fn send_selection_on_pipe(
+    pipe: &gst::Pipeline,
+    audio_id: Option<&str>,
+    subtitle_id: Option<&str>,
+    subtitles_enabled: bool,
+    tracks: &[MediaTrack],
+    active_stream_ids: &[String],
+) {
+    let ids = build_stream_selection(tracks, active_stream_ids, audio_id, subtitle_id, subtitles_enabled);
+    if ids.is_empty() {
+        return;
+    }
+    let event = gst::event::SelectStreams::new(ids.iter().map(String::as_str));
+    if !pipe.send_event(event) {
+        tracing::warn!("failed to send SelectStreams event");
+    }
+}
+
+/// Action to take in response to a `GST_MESSAGE_BUFFERING`, derived purely from
+/// the buffering mode, percent, and the user's intended play state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferingAction {
+    /// Live source — never pause/seek; ignore entirely (no indicator).
+    Ignore,
+    /// Report percent to the indicator only; do not touch playback state.
+    Report,
+    /// Report percent and pause (stream/queue2 underrun below 100%).
+    ReportAndPause,
+    /// Report percent and resume (buffer refilled and the user wants to play).
+    ReportAndResume,
+}
+
+/// Decide how to respond to a buffering message. Pure — no pipeline access, so
+/// it is unit-testable without a live pipeline.
+pub fn buffering_action(
+    mode: gst::BufferingMode,
+    percent: i32,
+    wants_play: bool,
+) -> BufferingAction {
+    match mode {
+        gst::BufferingMode::Live => BufferingAction::Ignore,
+        gst::BufferingMode::Download => BufferingAction::Report,
+        _ => {
+            if percent < 100 {
+                BufferingAction::ReportAndPause
+            } else if wants_play {
+                BufferingAction::ReportAndResume
+            } else {
+                BufferingAction::Report
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffering_decision_ignores_live_mode() {
+        assert_eq!(
+            buffering_action(gst::BufferingMode::Live, 40, true),
+            BufferingAction::Ignore
+        );
+        assert_eq!(
+            buffering_action(gst::BufferingMode::Live, 100, false),
+            BufferingAction::Ignore
+        );
+    }
+
+    #[test]
+    fn buffering_decision_download_reports_without_pausing() {
+        assert_eq!(
+            buffering_action(gst::BufferingMode::Download, 40, true),
+            BufferingAction::Report
+        );
+    }
+
+    #[test]
+    fn buffering_decision_download_at_100_no_action() {
+        assert_eq!(
+            buffering_action(gst::BufferingMode::Download, 100, true),
+            BufferingAction::Report
+        );
+    }
+
+    #[test]
+    fn buffering_decision_stream_pauses_below_100() {
+        assert_eq!(
+            buffering_action(gst::BufferingMode::Stream, 40, true),
+            BufferingAction::ReportAndPause
+        );
+    }
+
+    #[test]
+    fn buffering_decision_stream_resumes_at_100_when_user_wants_play() {
+        assert_eq!(
+            buffering_action(gst::BufferingMode::Stream, 100, true),
+            BufferingAction::ReportAndResume
+        );
+    }
+
+    #[test]
+    fn buffering_decision_stream_respects_user_pause() {
+        assert_eq!(
+            buffering_action(gst::BufferingMode::Stream, 100, false),
+            BufferingAction::Report
+        );
     }
 }

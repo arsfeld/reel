@@ -518,6 +518,7 @@ fn begin_initial_playback(
             resume_secs,
             base_offset_secs: 0.0,
             is_transcode: false,
+            backend_kind: app.playback_capabilities.active_backend,
         });
         app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
             available: false,
@@ -540,6 +541,7 @@ fn begin_initial_playback(
             resume_secs,
             base_offset_secs: 0.0,
             is_transcode: false,
+            backend_kind: app.playback_capabilities.active_backend,
         });
         app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
             available: false,
@@ -685,6 +687,7 @@ pub fn handle_playback_resolved(
         resume_secs: resume_out,
         base_offset_secs: base_offset,
         is_transcode,
+        backend_kind: app.playback_capabilities.active_backend,
     });
     // Update the quality menu indicator (R16) + transcode-aware track menus (AE6)
     // from the server-actual decision.
@@ -740,6 +743,7 @@ pub fn handle_playback_resolve_failed(
         resume_secs,
         base_offset_secs: 0.0,
         is_transcode: false,
+        backend_kind: app.playback_capabilities.active_backend,
     });
     app.video_player.emit(VideoPlayerMsg::SetDecisionInfo {
         available: true,

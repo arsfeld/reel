@@ -15,7 +15,6 @@ use relm4::gtk;
 
 use super::video_player::{VideoPlayer, VideoPlayerMsg, VideoPlayerWidgets};
 use crate::models::playback::DecisionStream;
-use crate::player::gst_pipeline::PlaybackPipeline;
 use crate::player::tracks::{MediaTrack, TrackKind};
 
 /// Whether a key is one the player consumes (so it doesn't bubble to the shell).
@@ -124,12 +123,11 @@ fn track_ui_signature(
 pub(super) fn rebuild_track_popovers(
     widgets: &VideoPlayerWidgets,
     tracks: &[MediaTrack],
-    media: Option<&PlaybackPipeline>,
+    subtitles_enabled: bool,
     transcode: Option<(&[DecisionStream], &[DecisionStream])>,
     sender: &ComponentSender<VideoPlayer>,
     signature: &mut String,
 ) {
-    let subtitles_enabled = media.is_some_and(PlaybackPipeline::subtitles_enabled);
     let sig = track_ui_signature(tracks, subtitles_enabled, transcode);
     if sig == *signature {
         return;

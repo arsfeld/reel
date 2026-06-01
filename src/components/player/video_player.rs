@@ -42,8 +42,8 @@ use crate::components::player::video_player_chrome::{
 };
 use crate::player::PlayState;
 use crate::player::SkipMarkers;
+use crate::player::backend::{PlaybackBackend, PlayerEvent};
 use crate::player::gst_pipeline::PlaybackPipeline;
-use crate::player::pipeline_msgs::PipelineBusMsg;
 use crate::player::subtitles::is_subtitle_extension;
 use crate::player::tracks::{MediaTrack, TrackKind};
 
@@ -149,6 +149,7 @@ pub(crate) enum VideoPlayerMsg {
         base_offset_secs: f64,
         /// Whether this is a server transcode — seeks reload at a new offset.
         is_transcode: bool,
+        backend_kind: crate::models::playback::PlaybackBackendKind,
     },
     /// Switch quality mid-playback (U8): emitted by the quality menu (U9). The
     /// player captures its current content position and asks the parent to
@@ -181,11 +182,7 @@ pub(crate) enum VideoPlayerMsg {
     LoadExternalSubtitle(String),
     FullscreenChanged(bool),
     FilesDropped(String),
-    StreamCollection(gst::StreamCollection),
-    StreamsSelected {
-        collection: gst::StreamCollection,
-        streams: Vec<gst::Stream>,
-    },
+    TracksChanged(Vec<MediaTrack>),
     SelectAudio(String),
     SelectSubtitle(Option<String>),
     /// Audio/subtitle track picked from the transcode-aware menu (AE6): carries
@@ -248,7 +245,7 @@ struct OsdState {
 }
 
 pub(crate) struct VideoPlayer {
-    media: Option<PlaybackPipeline>,
+    media: Option<PlaybackBackend>,
     url: Option<String>,
     duration_us: i64,
     position_us: i64,
@@ -761,6 +758,7 @@ impl Component for VideoPlayer {
                 resume_secs: init.resume_secs,
                 base_offset_secs: 0.0,
                 is_transcode: false,
+                backend_kind: crate::player::capabilities::PlaybackCapabilities::probe().active_backend,
             });
         }
 
@@ -807,7 +805,7 @@ impl Component for VideoPlayer {
         rebuild_track_popovers(
             widgets,
             &self.tracks,
-            self.media.as_ref(),
+            self.media.as_ref().is_some_and(|m| m.subtitles_enabled()),
             transcode_tracks,
             &sender,
             &mut self.track_ui_signature,
@@ -859,13 +857,15 @@ impl VideoPlayer {
         match msg {
             VideoPlayerMsg::LoadFile(path) => {
                 let url = format!("file://{}", path);
-                self.handle_set_url(widgets, &sender, Some(url), None, 0.0, false, Some(path));
+                let backend_kind = crate::player::capabilities::PlaybackCapabilities::probe().active_backend;
+                self.handle_set_url(widgets, &sender, Some(url), None, 0.0, false, backend_kind, Some(path));
             }
             VideoPlayerMsg::SetUrl {
                 url,
                 resume_secs,
                 base_offset_secs,
                 is_transcode,
+                backend_kind,
             } => {
                 self.handle_set_url(
                     widgets,
@@ -874,6 +874,7 @@ impl VideoPlayer {
                     resume_secs,
                     base_offset_secs,
                     is_transcode,
+                    backend_kind,
                     None,
                 );
             }
@@ -886,7 +887,16 @@ impl VideoPlayer {
             VideoPlayerMsg::Clear => {
                 self.tracks.clear();
                 self.track_ui_signature.clear();
-                self.handle_set_url(widgets, &sender, None, None, 0.0, false, None);
+                self.handle_set_url(
+                    widgets,
+                    &sender,
+                    None,
+                    None,
+                    0.0,
+                    false,
+                    crate::models::playback::PlaybackBackendKind::GStreamer,
+                    None,
+                );
             }
             VideoPlayerMsg::SetAutoplay(on) => self.playback.autoplay = on,
             VideoPlayerMsg::Tick => self.handle_tick(widgets, &sender),
@@ -954,6 +964,7 @@ impl VideoPlayer {
                 } else {
                     format!("file://{}", uri)
                 };
+                let backend_kind = crate::player::capabilities::PlaybackCapabilities::probe().active_backend;
                 self.handle_set_url(
                     widgets,
                     &sender,
@@ -961,6 +972,7 @@ impl VideoPlayer {
                     None,
                     0.0,
                     false,
+                    backend_kind,
                     Some(path.to_string()),
                 );
             }
@@ -979,20 +991,8 @@ impl VideoPlayer {
         msg: VideoPlayerMsg,
     ) {
         match msg {
-            VideoPlayerMsg::StreamCollection(collection) => {
-                if let Some(media) = self.media.as_ref() {
-                    media.handle_stream_collection(&collection);
-                    self.tracks = media.tracks();
-                }
-            }
-            VideoPlayerMsg::StreamsSelected {
-                collection,
-                streams,
-            } => {
-                if let Some(media) = self.media.as_ref() {
-                    media.handle_streams_selected(&collection, &streams);
-                    self.tracks = media.tracks();
-                }
+            VideoPlayerMsg::TracksChanged(tracks) => {
+                self.tracks = tracks;
             }
             VideoPlayerMsg::SelectAudio(id) => {
                 if let Some(media) = self.media.as_ref() {
@@ -1338,7 +1338,7 @@ impl VideoPlayer {
                 let current = self
                     .media
                     .as_ref()
-                    .map(PlaybackPipeline::speed)
+                    .map(|m| m.speed())
                     .unwrap_or(1.0);
                 let new = if key == Key::bracketleft {
                     (current - 0.1).max(0.1)
@@ -1424,6 +1424,7 @@ impl VideoPlayer {
         resume_secs: Option<f64>,
         base_offset_secs: f64,
         is_transcode: bool,
+        backend_kind: crate::models::playback::PlaybackBackendKind,
         local_path: Option<String>,
     ) {
         self.url = url.clone();
@@ -1459,53 +1460,54 @@ impl VideoPlayer {
         };
 
         let sender_bus = sender.clone();
-        let on_bus = Rc::new(move |msg: PipelineBusMsg| match msg {
-            PipelineBusMsg::StreamCollection(c) => {
-                sender_bus.input(VideoPlayerMsg::StreamCollection(c));
+        let on_bus = Rc::new(move |msg: PlayerEvent| match msg {
+            PlayerEvent::TracksChanged(tracks) => {
+                sender_bus.input(VideoPlayerMsg::TracksChanged(tracks));
             }
-            PipelineBusMsg::StreamsSelected {
-                collection,
-                streams,
-            } => {
-                sender_bus.input(VideoPlayerMsg::StreamsSelected {
-                    collection,
-                    streams,
-                });
-            }
-            PipelineBusMsg::Buffering { percent } => {
+            PlayerEvent::Buffering(percent) => {
                 sender_bus.input(VideoPlayerMsg::Buffering(percent));
             }
-            PipelineBusMsg::RenderFailed => {
+            PlayerEvent::RenderFailed => {
                 sender_bus.input(VideoPlayerMsg::RenderFailed);
             }
         });
 
-        let local_path_ref = local_path
-            .as_deref()
-            .or_else(|| url.strip_prefix("file://"));
-        let Some(pipeline) = PlaybackPipeline::new(
-            &url,
-            self.playback.autoplay,
-            self.preferred_subtitle_lang.clone(),
-            local_path_ref,
-            // The color-convert stage is only needed for direct-play (10-bit
-            // source frames); a transcode outputs SDR h264 that renders natively.
-            !is_transcode,
-            on_bus,
-        ) else {
-            widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
-            let msg = "Video playback unavailable (missing GStreamer plugins)".to_string();
-            let _ = sender.output(VideoPlayerOutput::Error(msg));
-            return;
+        let backend = match backend_kind {
+            crate::models::playback::PlaybackBackendKind::GStreamer => {
+                let local_path_ref = local_path
+                    .as_deref()
+                    .or_else(|| url.strip_prefix("file://"));
+                let Some(pipeline) = PlaybackPipeline::new(
+                    &url,
+                    self.playback.autoplay,
+                    self.preferred_subtitle_lang.clone(),
+                    local_path_ref,
+                    // The color-convert stage is only needed for direct-play (10-bit
+                    // source frames); a transcode outputs SDR h264 that renders natively.
+                    !is_transcode,
+                    on_bus,
+                ) else {
+                    widgets.picture.set_paintable(gtk::gdk::Paintable::NONE);
+                    let msg = "Video playback unavailable (missing GStreamer plugins)".to_string();
+                    let _ = sender.output(VideoPlayerOutput::Error(msg));
+                    return;
+                };
+
+                pipeline.set_volume(self.volume);
+                pipeline.set_muted(self.muted);
+                widgets.picture.set_paintable(Some(pipeline.paintable()));
+                PlaybackBackend::GStreamer(pipeline)
+            }
+            crate::models::playback::PlaybackBackendKind::Mpv => {
+                // Will implement Mpv backend construction in U4
+                todo!("mpv backend implementation")
+            }
         };
 
-        pipeline.set_volume(self.volume);
-        pipeline.set_muted(self.muted);
-        widgets.picture.set_paintable(Some(pipeline.paintable()));
         if self.playback.autoplay {
             self.playback.playing = true;
         }
-        self.media = Some(pipeline);
+        self.media = Some(backend);
     }
 
     /// Store buffering progress and refresh the status plate immediately so
