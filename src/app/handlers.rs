@@ -307,13 +307,13 @@ fn resolve_playback_at(
     // doesn't retry direct-play and re-trigger the black screen.
     let force_transcode = force_transcode || app.render_fallback.force_transcode();
     let caps = app.playback_capabilities;
-    let can_direct_play_10bit = crate::player::capabilities::can_direct_play(
-        caps.gst_can_render_10bit || caps.mpv_available,
+    let can_direct_play_10bit = crate::player::capabilities::can_direct_play_10bit(
+        caps,
         quality,
         force_transcode,
     );
-    let can_direct_play_hdr = crate::player::capabilities::can_direct_play(
-        caps.active_backend == crate::models::playback::PlaybackBackendKind::Mpv,
+    let can_direct_play_hdr = crate::player::capabilities::can_direct_play_hdr(
+        caps,
         quality,
         force_transcode,
     );
@@ -554,13 +554,13 @@ fn begin_initial_playback(
     };
 
     let caps = app.playback_capabilities;
-    let can_direct_play_10bit = crate::player::capabilities::can_direct_play(
-        caps.gst_can_render_10bit || caps.mpv_available,
+    let can_direct_play_10bit = crate::player::capabilities::can_direct_play_10bit(
+        caps,
         crate::models::playback::QualitySelection::Auto,
         false,
     );
-    let can_direct_play_hdr = crate::player::capabilities::can_direct_play(
-        caps.active_backend == crate::models::playback::PlaybackBackendKind::Mpv,
+    let can_direct_play_hdr = crate::player::capabilities::can_direct_play_hdr(
+        caps,
         crate::models::playback::QualitySelection::Auto,
         false,
     );

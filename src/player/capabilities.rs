@@ -120,6 +120,32 @@ pub(crate) fn can_direct_play(
     }
 }
 
+/// Whether to advertise 10-bit (SDR) direct-play for a request.
+pub(crate) fn can_direct_play_10bit(
+    caps: PlaybackCapabilities,
+    quality: QualitySelection,
+    force_transcode: bool,
+) -> bool {
+    can_direct_play(
+        caps.gst_can_render_10bit || caps.mpv_available,
+        quality,
+        force_transcode,
+    )
+}
+
+/// Whether to advertise HDR direct-play for a request.
+pub(crate) fn can_direct_play_hdr(
+    caps: PlaybackCapabilities,
+    quality: QualitySelection,
+    force_transcode: bool,
+) -> bool {
+    let probe_capable = match caps.active_backend {
+        PlaybackBackendKind::Mpv => true,
+        PlaybackBackendKind::GStreamer => caps.gst_can_render_10bit,
+    };
+    can_direct_play(probe_capable, quality, force_transcode)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,5 +219,49 @@ mod tests {
             QualitySelection::Manual(QualityPreset::Original),
             true
         ));
+    }
+
+    #[test]
+    fn can_direct_play_hdr_gstreamer_tests() {
+        // Covers AE1: Active backend GStreamer, gst_can_render_10bit = true, force_transcode = false
+        // quality Auto => HDR direct-play is true.
+        let caps = PlaybackCapabilities {
+            active_backend: PlaybackBackendKind::GStreamer,
+            gst_can_render_10bit: true,
+            mpv_available: false,
+        };
+        assert!(can_direct_play_hdr(caps, QualitySelection::Auto, false));
+
+        // Covers AE1: quality Manual(Original) => HDR direct-play is true.
+        assert!(can_direct_play_hdr(caps, QualitySelection::Manual(QualityPreset::Original), false));
+
+        // Covers AE3: quality set to capped manual => HDR direct-play is false.
+        assert!(!can_direct_play_hdr(caps, QualitySelection::Manual(QualityPreset::P1080Mbps8), false));
+
+        // With gst_can_render_10bit = false => HDR direct-play is false.
+        let caps_incapable = PlaybackCapabilities {
+            active_backend: PlaybackBackendKind::GStreamer,
+            gst_can_render_10bit: false,
+            mpv_available: false,
+        };
+        assert!(!can_direct_play_hdr(caps_incapable, QualitySelection::Auto, false));
+
+        // With force_transcode = true => HDR direct-play is false.
+        assert!(!can_direct_play_hdr(caps, QualitySelection::Auto, true));
+    }
+
+    #[test]
+    fn can_direct_play_hdr_mpv_tests() {
+        // With active backend Mpv => HDR direct-play depends on force_transcode and quality selection,
+        // and does not require gst_can_render_10bit to be true.
+        let caps = PlaybackCapabilities {
+            active_backend: PlaybackBackendKind::Mpv,
+            gst_can_render_10bit: false,
+            mpv_available: true,
+        };
+        assert!(can_direct_play_hdr(caps, QualitySelection::Auto, false));
+        assert!(can_direct_play_hdr(caps, QualitySelection::Manual(QualityPreset::Original), false));
+        assert!(!can_direct_play_hdr(caps, QualitySelection::Manual(QualityPreset::P1080Mbps8), false));
+        assert!(!can_direct_play_hdr(caps, QualitySelection::Auto, true));
     }
 }
