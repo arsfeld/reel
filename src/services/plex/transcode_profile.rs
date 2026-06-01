@@ -125,11 +125,11 @@ fn not_match_list(scope: &str, name: &str, list: &str) -> String {
 /// it when building the request URL.
 pub fn client_profile_extra(can_direct_play_10bit: bool, can_direct_play_hdr: bool) -> String {
     let mut directives: Vec<String> =
-        Vec::with_capacity(DIRECT_PLAY_PROFILES.len() + TRANSCODE_TARGETS.len() + 3);
+        Vec::with_capacity(DIRECT_PLAY_PROFILES.len() + TRANSCODE_TARGETS.len() + 7);
 
     for p in DIRECT_PLAY_PROFILES {
         directives.push(format!(
-            "add-direct-play-profile(type=videoProfile&container={}&videoCodec={}&audioCodec={})",
+            "add-direct-play-profile(type=videoProfile&container={}&videoCodec={}&audioCodec={}&subtitleCodec=srt,ass,ssa,vtt)",
             p.container, p.video_codecs, DIRECT_PLAY_AUDIO
         ));
     }
@@ -137,6 +137,12 @@ pub fn client_profile_extra(can_direct_play_10bit: bool, can_direct_play_hdr: bo
         directives.push(format!(
             "add-transcode-target(type=videoProfile&context=streaming&protocol={}&container={}&videoCodec={}&audioCodec={})",
             t.protocol, t.container, t.video_codec, t.audio_codec
+        ));
+    }
+
+    for sub in &["srt", "ass", "ssa", "vtt"] {
+        directives.push(format!(
+            "add-direct-play-profile(type=subtitleProfile&container={sub}&subtitleCodec={sub})"
         ));
     }
 
@@ -165,8 +171,18 @@ mod tests {
         // matroska + h264 + aac is a combo playbin3 plays natively.
         let extra = client_profile_extra(false, false);
         assert!(extra.contains(
-            "add-direct-play-profile(type=videoProfile&container=matroska&videoCodec=h264,hevc&audioCodec=aac,mp3,ac3,eac3,flac,opus,dts,pcm)"
+            "add-direct-play-profile(type=videoProfile&container=matroska&videoCodec=h264,hevc&audioCodec=aac,mp3,ac3,eac3,flac,opus,dts,pcm&subtitleCodec=srt,ass,ssa,vtt)"
         ));
+    }
+
+    #[test]
+    fn includes_subtitle_profiles() {
+        let extra = client_profile_extra(false, false);
+        for sub in &["srt", "ass", "ssa", "vtt"] {
+            assert!(extra.contains(&format!(
+                "add-direct-play-profile(type=subtitleProfile&container={sub}&subtitleCodec={sub})"
+            )));
+        }
     }
 
     #[test]
