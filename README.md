@@ -242,9 +242,6 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
   <a href="docs/journal.md">
     <img src="https://img.shields.io/badge/📖_Migration_Journal-docs%2Fjournal.md-purple?style=for-the-badge" alt="View Migration Progress"/>
   </a>
-  <a href="https://github.com/MrLesk/Backlog.md">
-    <img src="https://img.shields.io/badge/📋_Task_Management-Backlog.md-blue?style=for-the-badge" alt="Managed with Backlog.md"/>
-  </a>
 </p>
 
 **Migration Progress**: ~85% complete
@@ -289,7 +286,7 @@ The entire codebase leverages Rust's type system and ownership model to prevent 
 
 ## 🤝 Contributing
 
-Contributions are welcome! This project uses [Backlog.md](https://github.com/MrLesk/Backlog.md) for task management. To see available tasks and contribute, use the `backlog` CLI tool after entering the development environment.
+Contributions are welcome! Browse the [open issues](https://github.com/arsfeld/reel/issues) to find something to work on, or open one to propose a change.
 
 ### Before Submitting a PR:
 - Run `cargo fmt` to format your code
