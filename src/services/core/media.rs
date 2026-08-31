@@ -419,7 +419,7 @@ impl MediaService {
             }
         }
 
-        // Note: Cast/crew are no longer saved during sync (task-388)
+        // Note: Cast/crew are no longer saved during sync
         // They are fetched via lazy-loading when user views detail pages
         // This ensures we always get complete metadata, not truncated preview data
 

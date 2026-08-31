@@ -1,6 +1,6 @@
 # GStreamer Scrubber Position After Seeking - Manual Test
 
-## Test: task-430 - Fix GStreamer scrubber position after seeking
+## Test: Fix GStreamer scrubber position after seeking
 
 ### Purpose
 Verify that the video scrubber position updates correctly after seeking in the GStreamer backend and continues tracking playback without getting stuck.

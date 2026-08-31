@@ -1,7 +1,7 @@
 # Manual Test: GStreamer Scrubber Reset on New Content
 
 ## Issue
-Task-434: The GStreamer player scrubber UI shows stale position information when switching between videos. When you finish watching one video and open a different one, the scrubber continues to display the previous video's position instead of resetting to the new video's state.
+The GStreamer player scrubber UI shows stale position information when switching between videos. When you finish watching one video and open a different one, the scrubber continues to display the previous video's position instead of resetting to the new video's state.
 
 ## Root Cause
 When loading new media via `LoadMedia` or `LoadMediaWithContext` input handlers, the scrubber UI components (seek_bar, position_label, duration_label) were not being reset. They retained their values from the previous video until the first position update timer fired (every 1 second), causing a brief but noticeable display of stale information.
@@ -67,8 +67,7 @@ This ensures the UI immediately reflects the initial state of the new video, pre
 - [ ] No UI glitches, flashes, or position jumps when switching content
 
 ## Related Issues
-- task-430: GStreamer scrubber position sticking after seeking (different issue, also fixed)
-- task-296, task-310, task-320, task-327: Earlier scrubber-related issues
+- GStreamer scrubber position sticking after seeking (different issue, also fixed)
 
 ## Implementation Details
 **Files Modified**: `src/ui/pages/player.rs`

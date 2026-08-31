@@ -134,100 +134,13 @@ Reel implements a full-text search system using Tantivy (a Rust search engine li
 
 **Implementation Status:** ⚠️ **Implemented but NOT integrated**
 - File: `src/backends/plex/api/search_impl.rs:1-103`
-- Backend integration: Task-208 (In Progress)
 - **Gap:** Plex search methods exist but are not called from UI or SearchWorker
-
-## Backlog Tasks
-
-### Task-168: Implement search functionality using SearchWorker ✅
-**Status:** Complete (In Progress in backlog, but implementation is done)
-**Priority:** High
-**Assignee:** @claude
-
-**Acceptance Criteria:**
-- ✅ #1 Wire up SearchWorker in the main application
-- ✅ #2 Add search input field to the UI
-- ✅ #3 Connect search results to media grid display
-- ✅ #4 Handle search state and loading indicators
-- ✅ #5 Test search functionality with different media types
-
-**Implementation Notes:**
-All work completed. Search entry in header, SearchWorker integrated, SearchPage displays results in media grid, loading states implemented. Ready for testing.
-
-**Recommendation:** Mark as Done after testing.
-
----
-
-### Task-208: Add Plex search endpoints for content discovery ⚠️
-**Status:** In Progress
-**Priority:** High
-**Assignee:** @claude
-**Dependencies:** task-206
-
-**Acceptance Criteria:**
-- ✅ #1 Global search endpoint (/hubs/search) is implemented with query parameter support
-- ✅ #2 Library-specific search endpoint (/library/sections/{id}/search) works for movies and shows
-- ✅ #3 Search results return proper metadata including titles, summaries, and thumbnails
-- ❌ #4 Search integration works with existing UI search components
-- ✅ #5 Search supports filtering and sorting parameters
-
-**Current Gap:**
-Backend Plex search methods exist in `src/backends/plex/api/search_impl.rs` but are not integrated with the UI search system. The UI currently only searches the local Tantivy index.
-
-**Integration Options:**
-
-**Option A: Hybrid Search (Recommended)**
-- Keep Tantivy for fast local search
-- Add backend search as optional enhancement for:
-  - Real-time content discovery
-  - Filtering not available in local index
-  - Server-side metadata updates
-
-**Option B: Backend-Only Search**
-- Remove/replace Tantivy with direct backend queries
-- Pros: Always up-to-date, server-side filtering
-- Cons: Requires network, slower, no offline search
-
-**Option C: Dual Search Mode**
-- Toggle between local (fast) and remote (complete) search
-- User preference setting
-
-**Recommendation:** Option A - Use local Tantivy as primary, add backend search for advanced features.
-
----
-
-### Task-130: Implement cross-source search ⏸️
-**Status:** To Do
-**Priority:** Low
-**Labels:** search, feature
-
-**Acceptance Criteria:**
-- ❌ #1 Modify search to query all sources in parallel
-- ❌ #2 Merge and deduplicate results from multiple sources
-- ❌ #3 Add source filter chips to search results
-- ❌ #4 Include genre filtering in search interface
-- ❌ #5 Display source badge on each search result
-
-**Current Gap:**
-The current implementation searches all indexed content regardless of source, but provides no source filtering or badges. The Tantivy index doesn't store source information.
-
-**Required Changes:**
-1. **SearchDocument Schema:** Add `source_id` and `source_name` fields to Tantivy schema
-2. **SearchPage UI:** Add filter chips for source selection
-3. **SearchPage UI:** Add genre filter chips
-4. **MediaCard:** Add source badge overlay (requires MediaCard enhancement)
-5. **SearchWorker:** Support filtered queries by source
-
-**Blocked By:**
-- Need to decide on backend search integration (task-208) first
-- MediaCard component doesn't currently support badges
 
 ## Implementation Gaps
 
 ### 1. Backend Search Not Integrated (High Priority)
 **Issue:** Plex search API exists but isn't used
 **Impact:** Search only finds locally cached content, may miss new additions until next sync
-**Related Task:** Task-208 AC #4
 
 **Solution Path:**
 1. Add `search()` method back to `MediaBackend` trait (`src/backends/traits.rs`)
@@ -239,7 +152,6 @@ The current implementation searches all indexed content regardless of source, bu
 ### 2. Source Filtering (Medium Priority)
 **Issue:** Can't filter search results by source
 **Impact:** Users can't limit search to specific media servers
-**Related Task:** Task-130 AC #3
 
 **Solution Path:**
 1. Extend SearchDocument with `source_id: String` and `source_name: String` fields
@@ -251,7 +163,6 @@ The current implementation searches all indexed content regardless of source, bu
 ### 3. Genre Filtering (Medium Priority)
 **Issue:** Can't filter search by genre despite indexing genre data
 **Impact:** Users can't narrow results by genre
-**Related Task:** Task-130 AC #4
 
 **Solution Path:**
 1. Add genre filter chips to SearchPage UI
@@ -261,7 +172,6 @@ The current implementation searches all indexed content regardless of source, bu
 ### 4. Source Badges (Low Priority)
 **Issue:** Search results don't show which source each item is from
 **Impact:** In multi-source setups, unclear which server hosts content
-**Related Task:** Task-130 AC #5
 
 **Solution Path:**
 1. Extend MediaCard component to support badge overlays
@@ -284,7 +194,6 @@ async fn search(&self, query: &str, limit: Option<usize>) -> Result<Vec<MediaIte
 ### 6. Real-time Search (Low Priority)
 **Issue:** Search only updates after full sync completes
 **Impact:** New content takes time to appear in search
-**Related Task:** Task-208 AC #4
 
 **Solution Path:**
 1. Implement incremental index updates when new items are synced
@@ -325,19 +234,18 @@ async fn search(&self, query: &str, limit: Option<usize>) -> Result<Vec<MediaIte
 
 ## Recommendations
 
-### Short-term (Complete Task-168)
+### Short-term
 1. ✅ Basic functionality is complete
 2. **Action:** Test with various media types and queries
-3. **Action:** Mark task-168 as Done
-4. **Action:** Add search debouncing (wait 300ms after typing stops)
+3. **Action:** Add search debouncing (wait 300ms after typing stops)
 
-### Medium-term (Complete Task-208)
+### Medium-term
 1. **Decision:** Choose hybrid search approach (Option A)
 2. **Action:** Re-add `search()` to MediaBackend trait
 3. **Action:** Add "Search server" option to UI (optional backend search)
 4. **Action:** Show both local and remote results with source indicators
 
-### Long-term (Task-130 and beyond)
+### Long-term
 1. **Action:** Add source filtering UI
 2. **Action:** Add genre filtering UI
 3. **Action:** Implement source badges on MediaCard
@@ -357,11 +265,6 @@ async fn search(&self, query: &str, limit: Option<usize>) -> Result<Vec<MediaIte
 - `src/models/identifiers.rs` - MediaItemId type
 - `src/db/repository/media_repository.rs` - Database queries for search results
 - `src/ui/factories/media_card.rs` - Result card display
-
-### Tasks
-- `backlog/tasks/task-168 - Implement-search-functionality-using-SearchWorker.md`
-- `backlog/tasks/task-208 - Add-Plex-search-endpoints-for-content-discovery.md`
-- `backlog/tasks/task-130 - Implement-cross-source-search.md`
 
 ## Dependencies
 
