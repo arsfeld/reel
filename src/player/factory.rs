@@ -1,7 +1,10 @@
 use anyhow::Result;
 use gtk4;
 use std::time::Duration;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, trace};
+// warn! is only reached on the MPV code paths, which are compiled out on macOS.
+#[cfg(all(feature = "mpv", not(target_os = "macos")))]
+use tracing::warn;
 
 #[cfg(feature = "gstreamer")]
 use super::GStreamerPlayer;
