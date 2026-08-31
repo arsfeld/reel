@@ -263,9 +263,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder ostree
-          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          # Set these up in the user installation, because build-flatpak.sh runs
+          # flatpak-builder with --user --install-deps-from=flathub and so resolves
+          # dependencies there. A system-wide remote leaves the user installation
+          # without one, and the build fails with "No remote refs found for 'flathub'".
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
           # Install GNOME 48 SDK and Rust extension
-          sudo flatpak install -y flathub org.gnome.Platform//48 org.gnome.Sdk//48 org.freedesktop.Sdk.Extension.rust-stable//24.08
+          flatpak install --user -y flathub org.gnome.Platform//48 org.gnome.Sdk//48 org.freedesktop.Sdk.Extension.rust-stable//24.08
 
       - name: Setup uv for Python dependency management
         run: |
