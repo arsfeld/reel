@@ -50,9 +50,14 @@ fn main() -> Result<()> {
                 info!("XDG_DATA_DIRS not set, icon loading may not work correctly");
             }
 
-            // Set the icon theme name
+            // The display's IconTheme is a singleton whose name is owned by GtkSettings;
+            // setting it directly trips an assertion and has no effect.
             info!("Setting icon theme to: WhiteSur-dark");
-            icon_theme.set_theme_name(Some("WhiteSur-dark"));
+            if let Some(settings) = gtk4::Settings::default() {
+                settings.set_property("gtk-icon-theme-name", "WhiteSur-dark");
+                let theme: String = settings.property("gtk-icon-theme-name");
+                info!("GtkSettings icon theme set to: {}", theme);
+            }
 
             // Log current search paths for debugging
             let search_paths = icon_theme.search_path();
@@ -96,13 +101,6 @@ fn main() -> Result<()> {
             }
         } else {
             info!("Failed to get default display for icon theme configuration");
-        }
-
-        // Also set via GtkSettings for compatibility
-        if let Some(settings) = gtk4::Settings::default() {
-            settings.set_property("gtk-icon-theme-name", "WhiteSur-dark");
-            let theme: String = settings.property("gtk-icon-theme-name");
-            info!("GtkSettings icon theme set to: {}", theme);
         }
     }
 
