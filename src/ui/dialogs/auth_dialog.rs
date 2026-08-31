@@ -847,7 +847,7 @@ impl AsyncComponent for AuthDialog {
 
                             // Username/Password option
                             adw::PreferencesGroup {
-                                set_title: "Username & Password",
+                                set_title: "Username &amp; Password",
                                 set_description: Some("Traditional login with your Jellyfin credentials"),
                                 #[watch]
                                 set_sensitive: !model.jellyfin_url.is_empty(),
@@ -1294,21 +1294,22 @@ impl AsyncComponent for AuthDialog {
                     vbox.set_valign(gtk4::Align::Center);
                     vbox.set_halign(gtk4::Align::Center);
 
-                    let avatar_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+                    // The lock badge sits on top of the avatar's lower-right corner. GTK
+                    // margins cannot be negative, so an overlay does the positioning.
+                    let avatar_box = gtk4::Overlay::new();
                     avatar_box.set_halign(gtk4::Align::Center);
 
                     let avatar = adw::Avatar::new(80, Some(&user.name), true);
                     // TODO: Set custom image from user.thumb if available
-                    avatar_box.append(&avatar);
+                    avatar_box.set_child(Some(&avatar));
 
                     if user.is_protected {
                         let lock_icon = gtk4::Image::from_icon_name("dialog-password-symbolic");
                         lock_icon.add_css_class("warning");
                         lock_icon.set_icon_size(gtk4::IconSize::Normal);
-                        lock_icon.set_margin_top(-20);
-                        lock_icon.set_margin_start(60);
                         lock_icon.set_halign(gtk4::Align::End);
-                        avatar_box.append(&lock_icon);
+                        lock_icon.set_valign(gtk4::Align::End);
+                        avatar_box.add_overlay(&lock_icon);
                     }
 
                     vbox.append(&avatar_box);
