@@ -51,6 +51,10 @@ pub struct MainWindow {
     search_nav_page: Option<adw::NavigationPage>,
     preferences_dialog: Option<AsyncController<PreferencesDialog>>,
     auth_dialog: AsyncController<AuthDialog>,
+    // Held for the lifetime of the dialog: dropping an AsyncController shuts down the
+    // component's runtime, and the widget stays parented and visible, so any later
+    // button click would send into a closed channel.
+    reauth_dialog: Option<AsyncController<AuthDialog>>,
     navigation_view: adw::NavigationView,
     // Window chrome management
     content_header: adw::HeaderBar,
@@ -438,6 +442,7 @@ impl AsyncComponent for MainWindow {
             search_page: None,
             search_nav_page: None,
             preferences_dialog: None,
+            reauth_dialog: None,
             navigation_view: adw::NavigationView::new(),
             content_header: adw::HeaderBar::new(),
             sidebar_header: adw::HeaderBar::new(),
@@ -748,7 +753,9 @@ impl AsyncComponent for MainWindow {
                 // Show the dialog
                 reauth_dialog.emit(crate::ui::dialogs::AuthDialogInput::Show);
 
-                // The dialog will be dropped when done, which is fine for one-time use
+                // Replaces any previous re-auth dialog, dropping that one only once it is no
+                // longer on screen.
+                self.reauth_dialog = Some(reauth_dialog);
             }
             MainWindowInput::ReauthCompleted { source_id, success } => {
                 tracing::info!(
