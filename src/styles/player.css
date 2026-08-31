@@ -9,8 +9,6 @@
 /* OSD overlay controls base style - Ultra minimal */
 .osd {
     background: rgba(10, 10, 10, 0.8);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
     border-radius: 8px;
     padding: 6px;
     margin: 4px;
@@ -22,17 +20,11 @@
 /* OSD circular buttons - compact and minimal */
 .osd.circular {
     background: rgba(255, 255, 255, 0.06);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
     border: 1px solid rgba(255, 255, 255, 0.05);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
     transition: all 150ms ease;
-    min-width: 32px !important;
-    min-height: 32px !important;
-    width: 32px !important;
-    height: 32px !important;
-    max-width: 32px !important;
-    max-height: 32px !important;
+    min-width: 32px;
+    min-height: 32px;
     padding: 6px;
     border-radius: 50%;
     color: rgba(255, 255, 255, 0.8);
@@ -72,8 +64,6 @@
 /* Player controls container - ultra compact */
 .player-controls {
     background: rgba(12, 12, 12, 0.85);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
     border-radius: 10px;
     padding: 8px 12px;
     box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
@@ -82,8 +72,6 @@
 
 .player-controls.minimal {
     background: rgba(10, 10, 10, 0.8);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
     border-radius: 8px;
     padding: 6px 10px;
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
@@ -237,30 +225,20 @@
 
 /* Play/pause button container - enforces square aspect ratio */
 .play-pause-container {
-    width: 36px !important;
-    height: 36px !important;
-    min-width: 36px !important;
-    min-height: 36px !important;
-    max-width: 36px !important;
-    max-height: 36px !important;
-    padding: 0 !important;
-    margin: 0 !important;
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0;
+    margin: 0;
 }
 
 /* Play/pause button - sleek and minimal */
 .play-pause-button {
-    width: 36px !important;
-    height: 36px !important;
-    min-width: 36px !important;
-    min-height: 36px !important;
-    max-width: 36px !important;
-    max-height: 36px !important;
-    border-radius: 50% !important;
-    padding: 0 !important;
-    margin: 0 !important;
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 50%;
+    padding: 0;
+    margin: 0;
     background: rgba(255, 255, 255, 0.08);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
     border: none;
     transition: all 150ms ease;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
@@ -282,28 +260,20 @@
 
 /* Ensure play/pause icon is centered and properly sized */
 .play-pause-button image {
-    margin: 0 !important;
-    padding: 0 !important;
+    margin: 0;
+    padding: 0;
     min-width: 16px;
     min-height: 16px;
-    max-width: 16px;
-    max-height: 16px;
 }
 
 /* Other circular buttons (not play/pause) */
 .player-controls button.circular:not(.play-pause-button),
 button.circular:not(.play-pause-button) {
-    border-radius: 50% !important;
-    width: 34px !important;
-    height: 34px !important;
-    min-width: 34px !important;
-    min-height: 34px !important;
-    max-width: 34px !important;
-    max-height: 34px !important;
-    padding: 0 !important;
+    border-radius: 50%;
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0;
     background: rgba(255, 255, 255, 0.06);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
     border: none;
     transition: all 150ms ease;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
@@ -328,12 +298,10 @@ button.circular:not(.play-pause-button):active {
 /* Ensure other circular button icons are centered */
 .player-controls button.circular:not(.play-pause-button) image,
 button.circular:not(.play-pause-button) image {
-    margin: 0 !important;
-    padding: 0 !important;
+    margin: 0;
+    padding: 0;
     min-width: 16px;
     min-height: 16px;
-    max-width: 16px;
-    max-height: 16px;
 }
 
 /* Fullscreen styling */
@@ -347,8 +315,6 @@ button.circular:not(.play-pause-button) image {
 
 .fullscreen .player-controls {
     margin-bottom: 40px;
-    width: 80%;
-    max-width: 1200px;
 }
 
 /* Volume slider - ultra compact */
@@ -419,7 +385,6 @@ volumebutton scale {
     transform: translateY(8px);
     opacity: 0;
     transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-    pointer-events: none;
 }
 
 /* Smooth fade animations for fullscreen mode */
@@ -471,14 +436,10 @@ volumebutton scale {
 /* Back button and close button - minimalistic round */
 .player-controls-top button,
 .osd-top-bar button {
-    border-radius: 50% !important;
-    width: 32px !important;
-    height: 32px !important;
-    min-width: 32px !important;
-    min-height: 32px !important;
-    max-width: 32px !important;
-    max-height: 32px !important;
-    padding: 0 !important;
+    border-radius: 50%;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0;
     margin: 4px;
     background: rgba(20, 20, 22, 0.8);
     border: 1px solid rgba(255, 255, 255, 0.06);
@@ -635,7 +596,6 @@ volumebutton scale {
     border-radius: 12px;
     padding: 40px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-    max-width: 500px;
 }
 
 /* Auto-play overlay */
@@ -650,7 +610,6 @@ volumebutton scale {
 .pip-container {
     border: 2px solid rgba(255, 255, 255, 0.2);
     border-radius: 8px;
-    overflow: hidden;
     background-color: black;
     min-width: 320px;
     min-height: 180px;
@@ -660,7 +619,6 @@ volumebutton scale {
 button.circular,
 .circular,
 .player-controls .circular {
-    aspect-ratio: 1 / 1 !important;
     -gtk-icon-size: 16px;
 }
 
@@ -669,6 +627,4 @@ button.circular > *,
 .circular > * {
     min-width: inherit;
     min-height: inherit;
-    max-width: inherit;
-    max-height: inherit;
 }
