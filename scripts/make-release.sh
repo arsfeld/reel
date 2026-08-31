@@ -70,9 +70,13 @@ echo ""
 echo "Generating release notes with AI..."
 echo ""
 
-# Generate notes and save to temp file
+# Generate notes and save to temp file.
+# Capture stdout only: the generator writes its notes there and its progress and
+# diagnostics to stderr. Merging the two put lines like "Trying Claude CLI..." at the
+# top of the tag annotation, which is published verbatim as the release notes. Leaving
+# stderr on the terminal also makes the progress visible while the generator runs.
 NOTES_FILE=$(mktemp)
-if bash scripts/generate-release-notes.sh > "$NOTES_FILE" 2>&1; then
+if bash scripts/generate-release-notes.sh > "$NOTES_FILE"; then
   echo "=== Generated Release Notes ==="
   cat "$NOTES_FILE"
   echo "==============================="
@@ -85,8 +89,7 @@ if bash scripts/generate-release-notes.sh > "$NOTES_FILE" 2>&1; then
   rm "$NOTES_FILE"
 else
   echo "Warning: Failed to generate release notes with AI"
-  echo "Error output:"
-  cat "$NOTES_FILE"
+  echo "See the generator's output above for the reason."
   rm "$NOTES_FILE"
 
   echo ""
