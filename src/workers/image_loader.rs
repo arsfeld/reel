@@ -330,11 +330,15 @@ impl ImageLoader {
             // Get next highest priority item
             let request = loop {
                 if let Some(req) = self.priority_queue.pop() {
-                    // Check if this request is still pending (might have been cancelled)
-                    if self.pending_loads.contains_key(&req.id) {
+                    // A request stays in pending_loads while it runs, so "still pending" is
+                    // not enough on its own: without the active check a duplicate queue entry
+                    // starts a second download for the same id and orphans the first handle.
+                    if self.pending_loads.contains_key(&req.id)
+                        && !self.active_loads.contains_key(&req.id)
+                    {
                         break Some(req);
                     }
-                    // Skip cancelled items
+                    // Skip cancelled and already-running items
                 } else {
                     break None;
                 }
@@ -395,7 +399,11 @@ impl ImageLoader {
         // Rebuild the priority queue from pending loads
         self.priority_queue.clear();
         for request in self.pending_loads.values() {
-            self.priority_queue.push(request.clone());
+            // Already-running loads stay in pending_loads; re-queueing them here is what
+            // produced duplicate concurrent downloads of the same image.
+            if !self.active_loads.contains_key(&request.id) {
+                self.priority_queue.push(request.clone());
+            }
         }
     }
 }
