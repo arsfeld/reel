@@ -1520,6 +1520,12 @@ impl AsyncComponent for LibraryPage {
             debug!("Removed scroll debounce timer on library page shutdown");
         }
 
+        // Unparent the filters popover before its button is finalized, otherwise GTK
+        // warns about finalizing a button that still has children.
+        if let Some(popover) = self.filters_popover.take() {
+            popover.unparent();
+        }
+
         // Unsubscribe from MessageBroker
         relm4::spawn(async move {
             BROKER.unsubscribe("LibraryPage").await;

@@ -1195,6 +1195,12 @@ impl AsyncComponent for ShowDetailsPage {
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        // Unparent the episode popovers before their buttons are finalized, otherwise GTK
+        // warns about finalizing buttons that still have children.
+        for (_, popover) in self.episode_popovers.drain() {
+            popover.unparent();
+        }
+
         // Unsubscribe from MessageBroker
         relm4::spawn(async move {
             BROKER.unsubscribe("ShowDetailsPage").await;
