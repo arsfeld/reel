@@ -121,6 +121,16 @@
           # Copy SVG loader from librsvg
           cp ${pkgs.librsvg}/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.dylib $out/lib/gdk-pixbuf-2.0/2.10.0/loaders/ || true
 
+          # The loader links against @rpath/librsvg-2.2.dylib but ships no LC_RPATH, so once
+          # it is copied out of the librsvg prefix dyld has nothing to expand @rpath against
+          # and every SVG icon fails to load at runtime. Point the dependency at the store.
+          ${pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+            chmod u+w $out/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.dylib
+            install_name_tool \
+              -change @rpath/librsvg-2.2.dylib ${pkgs.librsvg}/lib/librsvg-2.2.dylib \
+              $out/lib/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.dylib
+          ''}
+
           # Generate combined loaders.cache with DYLD_LIBRARY_PATH so SVG loader can find librsvg
           # This is critical on macOS where dylibs have @rpath dependencies
           DYLD_LIBRARY_PATH="${pkgs.librsvg}/lib:${pkgs.gdk-pixbuf}/lib:${pkgs.glib}/lib:${pkgs.cairo}/lib" \
